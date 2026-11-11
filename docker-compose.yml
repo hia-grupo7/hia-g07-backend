@@ -1,0 +1,65 @@
+version: '3.8'
+
+networks:
+  rayuela-network:
+    name: rayuela-network
+    driver: bridge
+
+volumes:
+  postgres_data:
+    name: rayuela_postgres_data
+  pgadmin_data:
+    name: rayuela_pgadmin_data
+
+services:
+  # 1. MOTOR DE BASE DE DATOS: PostgreSQL 16 Alpine
+
+  postgres-primary:
+    image: postgres:16-alpine
+    container_name: rayuela-db-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-rayuela_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - rayuela-network
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-rayuela_db}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # 2. CLIENTE DE ADMINISTRACIÓN WEB: pgAdmin 4 (CARD-03)
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: rayuela-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@rayuela.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-pgadmin_rayuela_2024}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    networks:
+      - rayuela-network
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/misc/ping" ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
