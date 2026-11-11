@@ -5,8 +5,8 @@
       "Group": "Rayuela Servers",
       "Host": "postgres-primary",
       "Port": 5432,
-      "MaintenanceDB": "rayuela_db",
-      "Username": "rayuela_admin",
+      "MaintenanceDB": "postgres",
+      "Username": "postgres",
       "SSLMode": "prefer",
       "Shared": true,
       "Comments": "Servidor principal contenerizado de la plataforma Rayuela"
