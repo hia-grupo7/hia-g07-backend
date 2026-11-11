@@ -1,22 +1,60 @@
-# Dependencias
+# ============================================================
+# Rayuela Backend - .gitignore
+# Regla de oro: NINGUN secreto, volcado de BD ni backup se sube al repo.
+# ============================================================
+
+# --- Dependencias ---
 node_modules/
 
-# Variables de entorno
+# --- Secretos y credenciales (NUNCA subir) ---
 .env
-.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa*
+secrets/
+.secrets/
+credentials.json
+service-account*.json
 
-# Build
+# --- Volcados de base de datos y backups ---
+# Los .sql se ignoran por defecto (dumps, datos reales)...
+*.sql
+*.sql.gz
+*.dump
+*.bak
+backups/
+# ...excepto los scripts versionados del proyecto (esquema, seeds, carga masiva)
+!database/*.sql
+!database/**/*.sql
+
+# --- Build y cobertura ---
 dist/
+build/
+coverage/
+.nyc_output/
 
-# Logs
+# --- Logs ---
 logs/
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# Sistema operativo
+# --- Datos locales de contenedores (Docker) ---
+pgdata/
+pgadmin_data/
+docker-compose.override.yml
+
+# --- Sistema operativo ---
 .DS_Store
 Thumbs.db
 
-# IDE
+# --- IDE ---
 .vscode/
 .idea/
