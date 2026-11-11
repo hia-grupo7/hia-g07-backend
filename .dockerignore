@@ -1,4 +1,3 @@
-@"
 # Dependencias — se instalan dentro del contenedor
 node_modules
 
@@ -26,4 +25,3 @@ pgadmin/
 # IDEs
 .vscode/
 .idea/
-"@ | Set-Content -Encoding utf8 .dockerignore
