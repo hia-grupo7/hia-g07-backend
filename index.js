@@ -25,6 +25,28 @@ app.use('/covers', express.static(path.join(__dirname, 'public', 'covers')));
 // entrar a http://localhost:3000/api/docs para ver toda la interfaz visual
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerFile));
 
+// Endpoint de salud para Docker, Kubernetes y monitoreo
+app.get('/api/health', async (req, res) => {
+    try {
+        await sequelize.authenticate();
+        res.status(200).json({
+            status: 'ok',
+            servicio: 'rayuela-backend',
+            baseDeDatos: 'conectada',
+            uptimeSegundos: Math.floor(process.uptime()),
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(503).json({
+            status: 'error',
+            servicio: 'rayuela-backend',
+            baseDeDatos: 'desconectada',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
+
 //Cargamos el modulo de direccionamiento de rutas
 app.use('/api/inventario', require('./src/routes/inventory.route.js'));
 app.use('/api/libros', require('./src/routes/book.route.js'));
