@@ -94,6 +94,8 @@ services:
     restart: unless-stopped
     profiles:
       - blue
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -129,6 +131,8 @@ services:
     restart: unless-stopped
     profiles:
       - green
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 3000
