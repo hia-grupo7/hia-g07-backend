@@ -75,7 +75,9 @@ Log "PASO 3: Actualizando upstream de Nginx → $ServidorUpstream..."
 
 $contenido = Get-Content $CONF_NGINX -Raw
 $contenidoNuevo = $contenido -replace "server backend-(blue|green):3000;", "server $ServidorUpstream;"
-Set-Content -Path $CONF_NGINX -Value $contenidoNuevo -Encoding UTF8 -NoNewline
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+$rutaCompleta = (Resolve-Path $CONF_NGINX).Path
+[System.IO.File]::WriteAllText($rutaCompleta, $contenidoNuevo, $utf8NoBom)
 
 if (Select-String -Path $CONF_NGINX -Pattern "server $ServidorUpstream;" -Quiet) {
     Ok "Configuracion Nginx actualizada: upstream → $ServidorUpstream"
