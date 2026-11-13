@@ -1,7 +1,7 @@
 # =============================================================
 # Etapa 1: deps — instalar solo dependencias de producción
 # =============================================================
-FROM node:20-alpine AS deps
+FROM node:22-alpine AS deps
 
 # Instalar dependencias del sistema necesarias para módulos nativos (bcryptjs, pg)
 RUN apk add --no-cache python3 make g++
@@ -17,7 +17,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 # =============================================================
 # Etapa 2: builder — reunir código fuente con dependencias
 # =============================================================
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ COPY . .
 # =============================================================
 # Etapa 3: production — imagen final mínima y segura
 # =============================================================
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 # Metadatos de la imagen
 LABEL maintainer="Grupo 7 HIA — Rayuela Librería Online"
@@ -42,11 +42,18 @@ WORKDIR /app
 # Copiar solo los artefactos necesarios desde la etapa builder
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/index.js ./
+COPY --from=builder /app/app.js ./
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/swagger.js ./
 COPY --from=builder /app/swagger_output.json ./
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/config ./config
+
+# Seguridad (Trivy): aplicar parches de Alpine y quitar npm/yarn, que la app no necesita en
+# runtime (arranca con "node index.js") y traen dependencias con CVE propias.
+RUN apk upgrade --no-cache \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+              /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 
 # Usar usuario no-root por seguridad (UID 1000 — usuario 'node' incluido en la imagen Alpine)
 USER node
