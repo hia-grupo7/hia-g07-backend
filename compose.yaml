@@ -1,15 +1,20 @@
 # =============================================================================
-# compose.yaml — Stack Completo Rayuela con Blue/Green Deployment
+# compose.yaml — Stack Completo Rayuela con Blue/Green Deployment y Cloudflare Tunnel
 # CARD-10: Orquestación Docker Compose y Blue/Green Deployment
+# CARD-15: Publicación Segura en Internet con Cloudflare Tunnel y HTTPS
 #
 # Uso básico:
-#   docker compose --profile blue up -d          # Levantar slot Blue
-#   docker compose --profile green up -d         # Levantar slot Green
-#   docker compose up -d                         # Levantar infra base (DB + proxy)
+#   docker compose --profile blue up -d          # Levantar slot Blue + Tunnel
+#   docker compose --profile green up -d         # Levantar slot Green + Tunnel
+#   docker compose up -d                         # Levantar infra base + proxy + tunnel
 #
 # Conmutación sin corte:
 #   bash scripts/switch-bluegreen.sh green       # Cambiar de Blue a Green
 #   bash scripts/switch-bluegreen.sh blue        # Cambiar de Green a Blue
+#
+# Ver URL pública de Cloudflare:
+#   powershell -File scripts/get-tunnel-url.ps1  # Windows
+#   bash scripts/get-tunnel-url.sh               # Linux / macOS
 # =============================================================================
 
 networks:
@@ -42,8 +47,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - rayuela-network
-    ports:
-      - "${DB_PORT:-5432}:5432"
+    # Seguridad CARD-15: La base de datos es 100% privada dentro de rayuela-network.
+    # No se publican puertos al host para garantizar que PostgreSQL no sea accesible desde el exterior.
+    expose:
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres}"]
       interval: 10s
@@ -66,7 +73,7 @@ services:
     networks:
       - rayuela-network
     ports:
-      - "${PGADMIN_PORT:-5050}:80"
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
     depends_on:
       postgres-primary:
         condition: service_healthy
@@ -87,6 +94,8 @@ services:
     restart: unless-stopped
     profiles:
       - blue
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -122,6 +131,8 @@ services:
     restart: unless-stopped
     profiles:
       - green
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -190,3 +201,21 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # ===========================================================================
+  # PUBLICACIÓN SEGURA EN INTERNET — Cloudflare Tunnel (CARD-15 / NET-01)
+  # ===========================================================================
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: rayuela-tunnel
+    restart: unless-stopped
+    command: >-
+      tunnel
+      --no-autoupdate
+      --url http://nginx-proxy:80
+    networks:
+      - rayuela-network
+    depends_on:
+      nginx-proxy:
+        condition: service_healthy
