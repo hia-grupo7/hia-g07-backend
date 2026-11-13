@@ -26,7 +26,8 @@ El frontend (Angular) vive en el repositorio hermano
 El código sigue una estructura por capas:
 
 ```
-index.js               Arranque: middlewares, rutas y sincronización de la BD
+app.js                 Aplicación Express: middlewares y rutas. Las rutas y middlewares nuevos van aquí, no en index.js (se prueba sin base de datos)
+index.js               Arranque: sincronización de la BD y servidor HTTP
 config/                Conexión a PostgreSQL (Sequelize) y roles iniciales
 src/
   routes/              Definición de endpoints (/api/...)
@@ -36,8 +37,9 @@ src/
   middlewares/         Autenticación JWT y validaciones
   utils/               Utilidades (mapeo de libros)
 public/covers/         Portadas de libros servidas en /covers
+tests/                 Pruebas unitarias (Jest + supertest)
 seed.js                Carga inicial de libros e inventario
-swagger.js             Genera swagger_output.json (documentación)
+swagger.js             Genera swagger_output.json (documentación); lee las rutas desde app.js
 ```
 
 ## Stack tecnológico
@@ -128,7 +130,37 @@ Se definen en `.env` (ignorado por Git). La plantilla está en [`.env.example`](
 |---|---|
 | `npm run dev` | Regenera la documentación Swagger y arranca con `nodemon` |
 | `node seed.js` | Carga libros e inventario de ejemplo |
-| `npm test` | Pendiente: aún no hay pruebas automatizadas (se incorporarán con el pipeline CI/CD) |
+| `npm test` | Pruebas unitarias (Jest + supertest); no necesitan PostgreSQL |
+| `npm run test:coverage` | Igual que `npm test`, con informe de cobertura |
+
+---
+
+## CI/CD
+
+El pipeline vive en `.github/workflows/ci-cd.yml` (GitHub Actions) y se ejecuta en cada Pull Request y en cada push a `dev` y `main`.
+
+| Etapa | Cuándo corre | Qué hace |
+|---|---|---|
+| Tests unitarios | PR y push | `npm ci` y ejecuta `npm test` (Jest + supertest, sin base de datos real). |
+| Build Docker y Trivy | PR y push | Construye la imagen y la escanea con Trivy. **Falla** ante vulnerabilidades `CRITICAL` o `HIGH` que ya tengan parche. |
+| Versión semántica | push a `dev` / `main` | `semantic-release` calcula la versión desde los commits, crea el tag y el release en GitHub con el `CHANGELOG.md` adjunto. |
+| Publicación en GHCR | push, si hubo versión nueva | Publica `ghcr.io/hia-grupo7/hia-g07-backend:<versión>` (más `:dev` o `:latest` según la rama). |
+| Notificación | siempre | Resumen del estado en la pestaña del run y, si existe el secreto `NOTIFY_WEBHOOK_URL`, aviso por webhook. |
+
+Cada etapa depende de la anterior: si fallan los tests o Trivy, no se versiona ni se publica nada.
+
+**Versionado.** `fix` sube el parche, `feat` sube el minor y `BREAKING CHANGE` (o `!`) sube el major. En `dev` salen prereleases (`v1.1.0-dev.1`) y en `main` versiones estables (`v1.1.0`). Como `dev` y `main` se fusionan con squash o merge commit, **el título del Pull Request debe seguir Conventional Commits** (por ejemplo `feat(CARD-12): agregar filtro por categoría`). Un título sin tipo (`[CARD-12] ...`) no genera versión.
+
+**Secretos.** El pipeline usa solo el `GITHUB_TOKEN` automático. No hay credenciales en el repositorio.
+
+**Probar en tu máquina antes del PR:**
+
+```bash
+npm test
+docker build -t rayuela-backend .
+# Escaneo igual al del pipeline (requiere Docker):
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.76.1 \n  image --severity CRITICAL,HIGH --ignore-unfixed rayuela-backend
+```
 
 ---
 
@@ -193,6 +225,7 @@ Borrar el commit no alcanza: el secreto queda en el historial.
 ### Antes de abrir un Pull Request
 
 - [ ] La rama está actualizada con `dev` y los commits siguen Conventional Commits.
+- [ ] `npm test` pasa en local y el título del PR sigue Conventional Commits (define la versión).
 - [ ] No hay `.env`, tokens ni credenciales en el diff (`git diff` y `git status`).
 - [ ] La tarea cumple los criterios de aceptación de la tarjeta de Trello y se adjuntó evidencia.
 
