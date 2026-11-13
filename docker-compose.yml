@@ -10,6 +10,8 @@ volumes:
     name: rayuela_postgres_data
   pgadmin_data:
     name: rayuela_pgadmin_data
+  backups_data:
+    name: rayuela_backups_data
 
 services:
   # 1. MOTOR DE BASE DE DATOS: PostgreSQL 16 Alpine
@@ -63,3 +65,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 40s
+
+  # 3. SERVICIO DE BACKUP AUTOMATIZADO (CARD-05)
+
+  backup:
+    build: ./backup
+    container_name: rayuela-backup
+    restart: unless-stopped
+    environment:
+      DB_NAME: ${DB_NAME:-rayuela_db}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      TZ: America/Argentina/Jujuy
+    volumes:
+      - backups_data:/backups
+    networks:
+      - rayuela-network
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
