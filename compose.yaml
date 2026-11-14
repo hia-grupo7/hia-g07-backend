@@ -57,7 +57,58 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+  # ---------------------------------------------------------------------------
+  # NODO RÉPLICA (Hot Standby / Solo Lectura) — CARD-08
+  # ---------------------------------------------------------------------------
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: rayuela-db-replica
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: replicator123
+    networks:
+      - rayuela-network
+    ports:
+      - "5433:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    command: >
+      sh -c "
+      rm -rf /var/lib/postgresql/data/* &&
+      until pg_basebackup -h postgres-primary -U replicator -D /var/lib/postgresql/data -P -Xs -R --checkpoint=fast; do
+        echo 'Esperando al nodo primario para clonar catálogo...'; sleep 3;
+      done &&
+      chown -R postgres:postgres /var/lib/postgresql/data &&
+      chmod 0700 /var/lib/postgresql/data &&
+      exec su-exec postgres postgres -c hot_standby=on
+      "
 
+  # ---------------------------------------------------------------------------
+  # POOLER DE CONEXIONES — PgBouncer en puerto 6432 — CARD-08
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: rayuela-pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_USER: postgres
+      DB_PASSWORD: ${DB_PASSWORD:-admin123}
+      DB_HOST: postgres-primary
+      DB_NAME: ${DB_NAME:-postgres}
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 150
+      DEFAULT_POOL_SIZE: 25
+      LISTEN_PORT: 6432
+    networks:
+      - rayuela-network
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+        
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: rayuela-pgadmin
@@ -101,6 +152,8 @@ services:
       PORT: 3000
       DB_HOST: postgres-primary
       DB_PORT: 5432
+      DB_READ_HOST: postgres-replica
+      DB_READ_PORT: 5432
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-admin123}
@@ -138,6 +191,8 @@ services:
       PORT: 3000
       DB_HOST: postgres-primary
       DB_PORT: 5432
+      DB_READ_HOST: postgres-replica
+      DB_READ_PORT: 5432
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD:-admin123}
