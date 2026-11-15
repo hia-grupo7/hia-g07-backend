@@ -24,7 +24,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -54,7 +54,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "${DS_PROMETHEUS}"
+            "uid": "prometheus-rayuela"
           },
           "editorMode": "code",
           "expr": "up{job=\"rayuela-backend\"}",
@@ -69,7 +69,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -112,7 +112,7 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "prometheus-rayuela" },
           "editorMode": "code",
           "expr": "100 - (avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
           "legendFormat": "{{instance}}",
@@ -126,7 +126,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -169,7 +169,7 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "prometheus-rayuela" },
           "editorMode": "code",
           "expr": "100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes))",
           "legendFormat": "{{instance}}",
@@ -183,7 +183,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -226,7 +226,7 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "prometheus-rayuela" },
           "editorMode": "code",
           "expr": "100 * (node_filesystem_size_bytes - node_filesystem_avail_bytes) / node_filesystem_size_bytes",
           "legendFormat": "{{mountpoint}}",
@@ -240,7 +240,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -283,7 +283,7 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "prometheus-rayuela" },
           "editorMode": "code",
           "expr": "sum by (instance) (rate(node_network_receive_bytes_total[5m]))",
           "legendFormat": "recv {{instance}}",
@@ -297,7 +297,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -340,7 +340,7 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "prometheus-rayuela" },
           "editorMode": "code",
           "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{container!=\"\"}[5m]))",
           "legendFormat": "{{name}}",
@@ -354,7 +354,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "${DS_PROMETHEUS}"
+        "uid": "prometheus-rayuela"
       },
       "fieldConfig": {
         "defaults": {
@@ -397,7 +397,7 @@
       },
       "targets": [
         {
-          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "datasource": { "type": "prometheus", "uid": "prometheus-rayuela" },
           "editorMode": "code",
           "expr": "pg_stat_activity_count",
           "legendFormat": "activity",
