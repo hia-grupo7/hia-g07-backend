@@ -1,0 +1,21 @@
+groups:
+  - name: rayuela-observability
+    interval: 30s
+    rules:
+      - alert: PrometheusTargetMissing
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrapeo fallido en job {{ $labels.job }}"
+          description: "El job {{ $labels.job }} en la instancia {{ $labels.instance }} no esta respondiendo metricas."
+
+      - alert: BackendDown
+        expr: up{job="rayuela-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend Rayuela sin responder"
+          description: "El backend en {{ $labels.instance }} no responde al scrape de /api/metrics."

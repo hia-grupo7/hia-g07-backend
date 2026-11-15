@@ -27,6 +27,12 @@ volumes:
     name: rayuela_postgres_data
   pgadmin_data:
     name: rayuela_pgadmin_data
+  prometheus_data:
+    name: rayuela_prometheus_data
+  grafana_data:
+    name: rayuela_grafana_data
+  loki_data:
+    name: rayuela_loki_data
 
 services:
 
@@ -273,4 +279,115 @@ services:
       - rayuela-network
     depends_on:
       nginx-proxy:
+        condition: service_healthy
+
+  # ===========================================================================
+  # CAPA DE OBSERVABILIDAD — Prometheus, Grafana, Loki & Exporters (CARD-13 / OBS-01)
+  # ===========================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: rayuela-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9091:9090"
+    networks:
+      - rayuela-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rayuela-grafana
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+    networks:
+      - rayuela-network
+    depends_on:
+      - prometheus
+
+  loki:
+    image: grafana/loki:latest
+    container_name: rayuela-loki
+    restart: unless-stopped
+    command:
+      - '-config.file=/etc/loki/loki.yml'
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks:
+      - rayuela-network
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: rayuela-promtail
+    restart: unless-stopped
+    command:
+      - '-config.file=/etc/promtail/config.yml'
+    volumes:
+      - ./monitoring/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - rayuela-network
+    depends_on:
+      - loki
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: rayuela-node-exporter
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - '/:/host:ro,rslave'
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - rayuela-network
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: rayuela-cadvisor
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - rayuela-network
+
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: rayuela-postgres-exporter
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_NAME=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres-primary:5432/${DB_NAME:-postgres}?sslmode=disable
+    ports:
+      - "127.0.0.1:9187:9187"
+    networks:
+      - rayuela-network
+    depends_on:
+      postgres-primary:
         condition: service_healthy
