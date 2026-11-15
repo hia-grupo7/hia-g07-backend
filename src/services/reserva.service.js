@@ -1,6 +1,7 @@
 const Reserva = require('../models/reserva.model');
 const Inventory = require('../models/inventory.model');
 const Book = require('../models/book.model');
+const { rayuelaActiveReservations } = require('../metrics');
 
 const reservaService = {};
 
@@ -30,6 +31,8 @@ reservaService.crearReserva = async (idUsuario, idLibro) => {
             stock: inventario.stock - 1,
             reserved: inventario.reserved + 1
         });
+
+        rayuelaActiveReservations.inc();
 
         return await Reserva.findByPk(nuevaReserva.id, {
             include: [{ model: Book, as: 'book' }]
@@ -73,6 +76,8 @@ reservaService.cancelarReserva = async (idReserva) => {
                 reserved: inventario.reserved > 0 ? inventario.reserved - 1 : 0
             });
         }
+
+        rayuelaActiveReservations.dec();
 
         return reserva;
     } catch (error) {

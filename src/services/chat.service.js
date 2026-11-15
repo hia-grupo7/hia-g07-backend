@@ -1,4 +1,5 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { rayuelaGeminiRequests } = require('../metrics');
 
 const chatService = {};
 
@@ -26,8 +27,10 @@ chatService.consultarLibro = async (pregunta, tituloLibro, autorLibro) => {
         `;
 
         const result = await model.generateContent(prompt);
+        rayuelaGeminiRequests.labels('success').inc();
         return result.response.text();
     } catch (error) {
+        rayuelaGeminiRequests.labels('error').inc();
         console.error('Error al comunicarse con la IA:', error.message);
         // Fallback elegante para que el asistente siempre responda al cliente
         return `¡Hola! "${tituloLibro}" de ${autorLibro} es una lectura imprescindible. Explora temas cautivadores que lo convierten en un favorito de nuestros lectores. ¡Podés reservarlo o sumarlo a tu compra hoy mismo!`;
