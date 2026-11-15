@@ -65,7 +65,7 @@ services:
     container_name: rayuela-db-replica
     restart: unless-stopped
     environment:
-      PGPASSWORD: replicator123
+      PGPASSWORD: ${REPLICATOR_PASSWORD:-replicator123}
     networks:
       - rayuela-network
     ports:
