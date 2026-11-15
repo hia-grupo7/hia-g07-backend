@@ -238,12 +238,13 @@ services:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./monitoring/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
       - prometheus_data:/prometheus
     ports:
-      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:9091:9090"
     networks:
       - rayuela-network
 
@@ -274,11 +275,25 @@ services:
     volumes:
       - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
       - loki_data:/loki
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "127.0.0.1:3100:3100"
     networks:
       - rayuela-network
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: rayuela-promtail
+    restart: unless-stopped
+    command:
+      - '-config.file=/etc/promtail/config.yml'
+    volumes:
+      - ./monitoring/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - rayuela-network
+    depends_on:
+      - loki
 
   node_exporter:
     image: prom/node-exporter:latest
@@ -286,9 +301,8 @@ services:
     restart: unless-stopped
     command:
       - '--path.rootfs=/host'
-      - '--collector.systemd'
-      - '--collector.processes'
-      - '--collector.system'
+    volumes:
+      - '/:/host:ro,rslave'
     ports:
       - "127.0.0.1:9100:9100"
     networks:
@@ -310,11 +324,11 @@ services:
       - rayuela-network
 
   postgres_exporter:
-    image: prom/prometheuscommunity/postgres-exporter:latest
+    image: prometheuscommunity/postgres-exporter:latest
     container_name: rayuela-postgres-exporter
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_NAME=postgresql://postgres:${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres-primary:5432/${DB_NAME:-postgres}?sslmode=disable
+      - DATA_SOURCE_NAME=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres-primary:5432/${DB_NAME:-postgres}?sslmode=disable
     ports:
       - "127.0.0.1:9187:9187"
     networks:
