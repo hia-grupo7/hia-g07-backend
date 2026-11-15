@@ -19,3 +19,12 @@ groups:
         annotations:
           summary: "Backend Rayuela sin responder"
           description: "El backend en {{ $labels.instance }} no responde al scrape de /api/metrics."
+
+      - alert: RayuelaHighPaymentFailures
+        expr: rate(rayuela_payment_failure_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pagos fallidos detectados en Rayuela"
+          description: "Se registraron intentos de pago fallidos en los ultimos 5 minutos (tasa: {{ $value }})."
