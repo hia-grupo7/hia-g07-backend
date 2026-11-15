@@ -8,6 +8,8 @@ const sequelize = require('./config/database');
 const swaggerUi = require('swagger-ui-express');
 const swaggerFile = require('./swagger_output.json');
 
+const { collectDefaultMetrics, register } = require('prom-client');
+
 // Aplicacion Express sin arrancar el servidor ni sincronizar la base de datos.
 // index.js se encarga de eso; separarlo permite probar las rutas en CI (supertest).
 var app = express();
@@ -41,6 +43,12 @@ app.get('/api/health', async (req, res) => {
             timestamp: new Date().toISOString()
         });
     }
+});
+
+// Endpoint de métricas para Prometheus (prom-client) — OBS-02 / CARD-14
+app.get('/api/metrics', async (req, res) => {
+    res.setHeader('Content-Type', register.contentType);
+    res.end(await register.metrics());
 });
 
 //Cargamos el modulo de direccionamiento de rutas

@@ -1,6 +1,7 @@
 const axios = require('axios');
 const bookMapper = require('../utils/bookMapper');
 const Book = require('../models/book.model');
+const { rayuelaOpenLibraryLatency } = require('../metrics');
 
 const SEARCH_CATEGORIES = ['history', 'science', 'fiction', 'biography', 'technology', 'philosophy', 'mystery', 'romance', 'suspense', 'crime', 'psychology'];
 const BOOKS_PER_CATEGORY = 3;
@@ -16,7 +17,9 @@ async function fetchAuthorNames(authors = []) {
 
     for (const authorKey of authorKeys) {
         try {
+            const start = Date.now();
             const authorResponse = await axios.get(`https://openlibrary.org${authorKey}.json`, { timeout: 8000 });
+            rayuelaOpenLibraryLatency.observe((Date.now() - start) / 1000);
             if (authorResponse?.data?.name) {
                 names.push(authorResponse.data.name);
             }
@@ -35,7 +38,9 @@ bookService.fillInitialCatalog = async () => {
 
         for (const category of SEARCH_CATEGORIES) {
             const url = `https://openlibrary.org/search.json?q=subject:${category}&limit=${BOOKS_PER_CATEGORY}&fields=key,title,author_name,isbn,cover_i,subject,publish_date,language`;
+            const start = Date.now();
             const response = await axios.get(url, { timeout: 15000 });
+            rayuelaOpenLibraryLatency.observe((Date.now() - start) / 1000);
             const books = response.data.docs || [];
 
             for (const doc of books) {

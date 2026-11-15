@@ -1,0 +1,45 @@
+const {
+    Counter,
+    Gauge,
+    Histogram,
+    collectDefaultMetrics
+} = require('prom-client');
+
+collectDefaultMetrics({ timeout: 5000 });
+
+const rayuelaPaymentSuccess = new Counter({
+    name: 'rayuela_payment_success_total',
+    help: 'Cantidad de pagos exitosos en Mercado Pago',
+    labelNames: ['metodo']
+});
+
+const rayuelaPaymentFailure = new Counter({
+    name: 'rayuela_payment_failure_total',
+    help: 'Cantidad de pagos fallidos en Mercado Pago',
+    labelNames: ['metodo', 'reason']
+});
+
+const rayuelaGeminiRequests = new Counter({
+    name: 'rayuela_gemini_requests_total',
+    help: 'Cantidad de solicitudes al servicio de inteligencia artificial (Gemini)',
+    labelNames: ['status']
+});
+
+const rayuelaActiveReservations = new Gauge({
+    name: 'rayuela_active_reservations_gauge',
+    help: 'Cantidad de reservas activas vigentes en el sistema'
+});
+
+const rayuelaOpenLibraryLatency = new Histogram({
+    name: 'rayuela_open_library_latency_seconds',
+    help: 'Latencia de las llamadas a la API de Open Library',
+    buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5]
+});
+
+module.exports = {
+    rayuelaPaymentSuccess,
+    rayuelaPaymentFailure,
+    rayuelaGeminiRequests,
+    rayuelaActiveReservations,
+    rayuelaOpenLibraryLatency
+};
