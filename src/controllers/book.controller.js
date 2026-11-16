@@ -18,7 +18,7 @@ bookController.fillInitialCatalog = async (req, res) => {
 bookController.getBooks = async (req, res) => {
     try {
         const books = await bookService.getBooks();
-        res.json(books);
+        res.json({ libros: books });
     } catch (error) {
         console.error('Error al obtener los libros:', error.message);
         res.status(500).json({
