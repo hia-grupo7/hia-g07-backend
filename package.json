@@ -7,6 +7,7 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
+    "lint": "eslint .",
     "test": "jest --ci",
     "test:coverage": "jest --ci --coverage",
     "dev": "node swagger.js && npx nodemon index.js"
@@ -33,6 +34,9 @@
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
     "jest": "^30.5.2",
     "nodemon": "^3.1.14",
     "supertest": "^7.3.2"

@@ -130,6 +130,7 @@ Se definen en `.env` (ignorado por Git). La plantilla está en [`.env.example`](
 |---|---|
 | `npm run dev` | Regenera la documentación Swagger y arranca con `nodemon` |
 | `node seed.js` | Carga libros e inventario de ejemplo |
+| `npm run lint` | Análisis estático con ESLint (el mismo que corre en el pipeline) |
 | `npm test` | Pruebas unitarias (Jest + supertest); no necesitan PostgreSQL |
 | `npm run test:coverage` | Igual que `npm test`, con informe de cobertura |
 
@@ -141,6 +142,7 @@ El pipeline vive en `.github/workflows/ci-cd.yml` (GitHub Actions) y se ejecuta 
 
 | Etapa | Cuándo corre | Qué hace |
 |---|---|---|
+| Lint (ESLint) | PR y push | `npm ci` y ejecuta `npm run lint`. **Falla** ante errores; los avisos (`warn`) no bloquean. |
 | Tests unitarios | PR y push | `npm ci` y ejecuta `npm test` (Jest + supertest, sin base de datos real). |
 | Build Docker y Trivy | PR y push | Construye la imagen y la escanea con Trivy. **Falla** ante vulnerabilidades `CRITICAL` o `HIGH` que ya tengan parche. |
 | Versión semántica | push a `dev` / `main` | `semantic-release` calcula la versión desde los commits, crea el tag y el release en GitHub con el `CHANGELOG.md` adjunto. |
@@ -225,7 +227,7 @@ Borrar el commit no alcanza: el secreto queda en el historial.
 ### Antes de abrir un Pull Request
 
 - [ ] La rama está actualizada con `dev` y los commits siguen Conventional Commits.
-- [ ] `npm test` pasa en local y el título del PR sigue Conventional Commits (define la versión).
+- [ ] `npm run lint` y `npm test` pasan en local y el título del PR sigue Conventional Commits (define la versión).
 - [ ] No hay `.env`, tokens ni credenciales en el diff (`git diff` y `git status`).
 - [ ] La tarea cumple los criterios de aceptación de la tarjeta de Trello y se adjuntó evidencia.
 
