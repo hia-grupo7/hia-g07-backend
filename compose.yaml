@@ -146,7 +146,7 @@ services:
   # ===========================================================================
 
   backend-blue:
-    image: rayuela-backend:1.0.0
+    image: ${BACKEND_BLUE_IMAGE:-rayuela-backend:1.0.0}
     container_name: rayuela-backend-blue
     restart: unless-stopped
     profiles:
@@ -185,7 +185,7 @@ services:
   # ===========================================================================
 
   backend-green:
-    image: rayuela-backend:1.0.0
+    image: ${BACKEND_GREEN_IMAGE:-rayuela-backend:1.0.0}
     container_name: rayuela-backend-green
     restart: unless-stopped
     profiles:
