@@ -186,7 +186,8 @@ la pérdida en el incidente.
 Ensayo realizado el 2026-11-15 en el entorno local del Responsable 3 (Docker Desktop,
 stack completo con slot blue activo). La versión defectuosa es la del chaos test de CICD-02
 (`/api/libros` devuelve `{ "libros": [...] }` en lugar de `[...]`); ver
-[`chaos_test_CICD-02.md`](chaos_test_CICD-02.md).
+[PR #17](https://github.com/hia-grupo7/hia-g07-backend/pull/17), cerrado sin fusionar: allí está la
+ejecución del pipeline que lo detuvo.
 
 | Paso | Qué se hizo | Resultado |
 |---|---|---|
