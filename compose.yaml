@@ -162,7 +162,7 @@ services:
       PORT: 3000
       DB_HOST: postgres-primary
       DB_PORT: 5432
-      DB_READ_HOST: postgres-replica
+      DB_READ_HOST: postgres-primary
       DB_READ_PORT: 5432
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
@@ -201,7 +201,7 @@ services:
       PORT: 3000
       DB_HOST: postgres-primary
       DB_PORT: 5432
-      DB_READ_HOST: postgres-replica
+      DB_READ_HOST: postgres-primary
       DB_READ_PORT: 5432
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
