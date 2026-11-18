@@ -35,6 +35,8 @@ volumes:
     name: rayuela_loki_data
   mantis_db_data:
     name: rayuela_mantis_db_data
+  n8n_data:
+    name: rayuela_n8n_data
 
 services:
 
@@ -393,6 +395,40 @@ services:
     depends_on:
       postgres-primary:
         condition: service_healthy
+
+  # ===========================================================================
+  # AUTOMATIZACIÓN — n8n (CARD sprint 4 / N8N-01)
+  # Despliegue de n8n con persistencia (volumen n8n_data) y protección de credenciales
+  # (basic auth + N8N_ENCRYPTION_KEY). Los flujos se configuran en el editor de n8n con
+  # credenciales (MantisBT API, Telegram, Email/SMTP). La base de datos interna de n8n
+  # es SQLite persistente dentro del volumen.
+  # ===========================================================================
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: rayuela-n8n
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=http://localhost:${N8N_PORT:-5678}
+      - N8N_PORT=${N8N_PORT:-5678}
+      - N8N_BASE_URL=http://localhost:${N8N_PORT:-5678}
+      - WEBHOOK_URL=http://localhost:${N8N_PORT:-5678}
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-}
+    volumes:
+      - n8n_data:/home/node/.n8n
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    networks:
+      - rayuela-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # ===========================================================================
   # GESTIÓN DE INCIDENCIAS — MantisBT + MariaDB (CARD-19 / MAN-01)
