@@ -1,0 +1,127 @@
+{
+  "name": "N8N-01 Fl.1 - Alertas de Infraestructura (Grafana -> MantisBT -> Notificacion)",
+  "nodes": [
+    {
+      "id": "n8n-fl1-webhook-001",
+      "name": "Webhook Grafana Alertas",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "grafana-alerta",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "grafana-alerta-5d8f2a1b9c7e"
+    },
+    {
+      "id": "n8n-fl1-code-001",
+      "name": "Enriquecer Alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ],
+      "parameters": {
+        "language": "javascript",
+        "jsCode": "const alert = items[0].json || {};\nconst alertName = alert.alertName || alert.title || alert.fingerprint || 'Alerta sin nombre';\nconst instancia = alert.instance || alert.tenant || 'desconocida';\nconst estado = alert.state || 'active';\nconst labels = (Array.isArray(alert.labels) ? alert.labels : []).map(l => (typeof l === 'string' ? l : (l.name || l))).join(', ');\nconst description = [\n  'Alerta de infraestructura detectada por Grafana.',\n  'Alerta: ' + alertName,\n  'Instancia: ' + instancia,\n  'Estado: ' + estado,\n  'Labels: ' + labels,\n  'Payload: ' + JSON.stringify(alert),\n].join('\\n');\nconst summary = 'Alerta infraestructura: ' + alertName;\nreturn [{ json: Object.assign({}, alert, { alertName, summary, description }) }];"
+      }
+    },
+    {
+      "id": "n8n-fl1-http-001",
+      "name": "Crear Ticket MantisBT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8081/api/rest/issues",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "summary": "={{ $json.summary }}",
+          "description": "={{ $json.description }}",
+          "projectId": 1
+        },
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "n8n-fl1-email-001",
+      "name": "Notificar Incidente",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1160,
+        300
+      ],
+      "parameters": {
+        "fromEmail": "n8n@rayuela.local",
+        "toEmail": "alertas@rayuela.local",
+        "subject": "=\"Alerta infraestructura: {{ $json.alertName || 'sin nombre' }}\"",
+        "emailFormat": "html",
+        "html": "<h2>Alerta de infraestructura</h2><p><strong>{{ $json.alertName || 'sin nombre' }}</strong></p><pre>{{ JSON.stringify($json, null, 2) }}</pre>",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "smtp-rayuela-001",
+          "name": "SMTP Rayuela"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Grafana Alertas": {
+      "main": [
+        [
+          {
+            "node": "Enriquecer Alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enriquecer Alerta": {
+      "main": [
+        [
+          {
+            "node": "Crear Ticket MantisBT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear Ticket MantisBT": {
+      "main": [
+        [
+          {
+            "node": "Notificar Incidente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Incidente": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
