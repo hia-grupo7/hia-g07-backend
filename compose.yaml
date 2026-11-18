@@ -35,6 +35,8 @@ volumes:
     name: rayuela_loki_data
   mantis_db_data:
     name: rayuela_mantis_db_data
+  backups_data:
+    name: rayuela_backups_data
 
 services:
 
@@ -359,7 +361,7 @@ services:
     command:
       - '--path.rootfs=/host'
     volumes:
-      - '/:/host:ro,rslave'
+      - '/:/host:ro,'
     ports:
       - "127.0.0.1:9100:9100"
     networks:
@@ -451,4 +453,31 @@ services:
       - "127.0.0.1:${MANTIS_PORT:-8081}:80"
     depends_on:
       mantis-db:
+        condition: service_healthy
+
+# SERVICIO DE BACKUP AUTOMATIZADO (CARD-05)
+# Realizar backup manual: 
+#   docker exec -it rayuela-backup sh /usr/local/bin/backup.sh
+# Consultar Backups generados: 
+#   docker exec -it rayuela-backup ls -lh /backups
+# Restaurar un Backup
+#   docker exec -it rayuela-backup sh /usr/local/bin/restore.sh /backups/ARCHIVO.sql.gz NOMBRE_BASE_DESTINO
+#   ejemplo: 
+#     docker exec -it rayuela-backup sh /usr/local/bin/restore.sh /backups/backup_2026-11-18_030000.sql.gz rayuela_test_restore
+
+  backup:
+    build: ./backup
+    container_name: rayuela-backup
+    restart: unless-stopped
+    environment:
+      DB_NAME: ${DB_NAME:-rayuela_db}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      TZ: America/Argentina/Jujuy
+    volumes:
+      - backups_data:/backups
+    networks:
+      - rayuela-network
+    depends_on:
+      postgres-primary:
         condition: service_healthy
