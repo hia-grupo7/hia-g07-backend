@@ -33,6 +33,8 @@ volumes:
     name: rayuela_grafana_data
   loki_data:
     name: rayuela_loki_data
+  mantis_db_data:
+    name: rayuela_mantis_db_data
 
 services:
 
@@ -146,7 +148,7 @@ services:
   # ===========================================================================
 
   backend-blue:
-    image: rayuela-backend:1.0.0
+    image: ${BACKEND_BLUE_IMAGE:-rayuela-backend:1.0.0}
     container_name: rayuela-backend-blue
     restart: unless-stopped
     profiles:
@@ -185,7 +187,7 @@ services:
   # ===========================================================================
 
   backend-green:
-    image: rayuela-backend:1.0.0
+    image: ${BACKEND_GREEN_IMAGE:-rayuela-backend:1.0.0}
     container_name: rayuela-backend-green
     restart: unless-stopped
     profiles:
@@ -390,4 +392,63 @@ services:
       - rayuela-network
     depends_on:
       postgres-primary:
+        condition: service_healthy
+
+  # ===========================================================================
+  # GESTIÓN DE INCIDENCIAS — MantisBT + MariaDB (CARD-19 / MAN-01)
+  # Perfil "mantis": docker compose --profile mantis up -d mantis
+  # Las contraseñas se definen en .env (sin valores por defecto en el repositorio).
+  # ===========================================================================
+
+  mantis-db:
+    image: mariadb:10.11
+    container_name: rayuela-mantis-db
+    restart: unless-stopped
+    profiles:
+      - mantis
+    environment:
+      MARIADB_DATABASE: bugtracker
+      MARIADB_USER: mantis
+      MARIADB_PASSWORD: ${MANTIS_DB_PASSWORD:-}
+      MARIADB_ROOT_PASSWORD: ${MANTIS_DB_ROOT_PASSWORD:-}
+    volumes:
+      - mantis_db_data:/var/lib/mysql
+    networks:
+      - rayuela-network
+    expose:
+      - "3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Imagen de la comunidad (xlrl/mantisbt), fijada por version y por digest: no se actualiza sola.
+  # La configuracion de Mantis se monta desde mantis/config_inc.php (la imagen no trae una).
+  mantis:
+    image: xlrl/mantisbt:2.28.4@sha256:a1253afdea1702dabbfef712a6f596247582d2fc61c249b118ea4a5a114fe226
+    container_name: rayuela-mantis
+    restart: unless-stopped
+    profiles:
+      - mantis
+    environment:
+      MANTIS_DB_HOST: mantis-db
+      MANTIS_DB_NAME: bugtracker
+      MANTIS_DB_USER: mantis
+      MANTIS_DB_PASSWORD: ${MANTIS_DB_PASSWORD:-}
+      MANTIS_CRYPTO_SALT: ${MANTIS_CRYPTO_SALT:-}
+      MANTIS_BASE_URL: http://localhost:${MANTIS_PORT:-8081}/
+      MANTIS_TIMEZONE: America/Argentina/Jujuy
+      # 1 solo durante la instalacion del esquema (habilita /admin); luego 0.
+      MANTIS_ENABLE_ADMIN: ${MANTIS_ENABLE_ADMIN:-0}
+    volumes:
+      - ./mantis/config_inc.php:/var/www/html/config/config_inc.php:ro
+    networks:
+      - rayuela-network
+    # Solo accesible desde el propio equipo (igual que Grafana y pgAdmin).
+    ports:
+      - "127.0.0.1:${MANTIS_PORT:-8081}:80"
+    depends_on:
+      mantis-db:
         condition: service_healthy
