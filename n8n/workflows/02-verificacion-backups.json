@@ -1,0 +1,94 @@
+{
+  "name": "N8N-01 Fl.2 - Verificacion de Backups (Schedule -> Check -> Notificar)",
+  "nodes": [
+    {
+      "id": "n8n-fl2-sched-001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 4
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n8n-fl2-code-001",
+      "name": "Validar Backup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ],
+      "parameters": {
+        "language": "javascript",
+        "jsCode": "const fs = require('fs');\nconst dir = '/backups';\nconst prefix = 'rayuela_';\nconst suffix = '.sql.gz';\nlet estado = 'OK';\nlet detalle = 'Backup OK';\nlet archivo = null;\ntry {\n  const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.startsWith(prefix) && f.endsWith(suffix)) : [];\n  if (files.length === 0) {\n    estado = 'FALLO';\n    detalle = 'No se encontraron archivos de backup en /backups';\n  } else {\n    files.sort();\n    const ultimo = files[files.length - 1];\n    const stats = fs.statSync(dir + '/' + ultimo);\n    if (!stats || stats.size === 0) {\n      estado = 'FALLO';\n      detalle = 'El backup ' + ultimo + ' esta vacio';\n    } else {\n      estado = 'OK';\n      detalle = 'Backup OK: ' + ultimo + ' (' + stats.size + ' bytes)';\n    }\n    archivo = ultimo;\n  }\n} catch (e) {\n  estado = 'FALLO';\n  detalle = 'Error validando backups: ' + e.message;\n}\nreturn [{ json: { estado: estado, detalle: detalle, archivo: archivo } }];"
+      }
+    },
+    {
+      "id": "n8n-fl2-email-001",
+      "name": "Notificar Estado Backup",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {
+        "fromEmail": "n8n@rayuela.local",
+        "toEmail": "alertas@rayuela.local",
+        "subject": "=\"Estado backup Rayuela: {{ $json.estado }}\"",
+        "emailFormat": "html",
+        "html": "<p>Estado backup: <strong>{{ $json.estado }}</strong></p><p>{{ $json.detalle }}</p>",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "smtp-rayuela-001",
+          "name": "SMTP Rayuela"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validar Backup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Backup": {
+      "main": [
+        [
+          {
+            "node": "Notificar Estado Backup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Estado Backup": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
