@@ -270,7 +270,7 @@ services:
       MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
       EMAIL_PASS_FILE: /run/secrets/email_pass
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
-      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
       SLOT: blue
     secrets:
       - db_password
@@ -327,7 +327,7 @@ services:
       MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
       EMAIL_PASS_FILE: /run/secrets/email_pass
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
-      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
       SLOT: green
     secrets:
       - db_password

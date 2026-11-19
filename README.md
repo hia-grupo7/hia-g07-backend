@@ -208,15 +208,16 @@ de cada backend: blue y green no los comparten.
 **IP del cliente (`TRUST_PROXY_HOPS`).** El limitador cuenta por IP y la IP real llega en `X-Forwarded-For`. La cantidad de
 proxies de confianza tiene que coincidir con cómo llegan los pedidos:
 
-- `1` (por defecto): acceso directo a nginx, sin túnel.
-- `2`: a través del túnel de Cloudflare (cloudflared + nginx).
+- `2` (por defecto en el compose): a través del túnel de Cloudflare (cloudflared + nginx). Como `cloudflared` se levanta
+  junto con el stack, no hace falta configurar nada para que funcione con la URL pública.
+- `1`: acceso directo a nginx, sin túnel.
 
 Con `1` detrás del túnel el backend ve la IP interna de Docker y todos los visitantes de internet compartirían un solo
 contador; con `2` ve la IP pública real y un `X-Forwarded-For` falso se ignora (ambos casos verificados leyendo la IP que
-registra la aplicación). Mientras el túnel esté levantado, definir `TRUST_PROXY_HOPS=2` en `.env`, recrear el backend
-(`docker compose --profile blue up -d backend-blue`) y recargar nginx (`docker exec rayuela-nginx-proxy nginx -s reload`);
-volver a `1` al apagarlo. Con `2` y acceso directo sin túnel, un `X-Forwarded-For` falso podría eludir el límite (deducido
-del funcionamiento de Express, no probado).
+registra la aplicación). Con `2` y acceso directo sin túnel, un `X-Forwarded-For` falso podría eludir el límite (deducido
+del funcionamiento de Express, no probado). Si se usa el stack sin túnel, definir `TRUST_PROXY_HOPS=1` en `.env`, recrear el
+backend (`docker compose --profile blue up -d backend-blue`) y recargar nginx
+(`docker exec rayuela-nginx-proxy nginx -s reload`).
 
 **Limitaciones.** Limitar por IP implica que cada familia de direcciones tiene su propio contador: un cliente con IPv4 e
 IPv6 (doble pila) puede alternar entre las dos y obtener el doble de cupo. Es un freno a la fuerza bruta, no una defensa

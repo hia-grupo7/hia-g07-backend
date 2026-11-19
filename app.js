@@ -15,7 +15,8 @@ const { limitadorLogin, limitadorVerificar2FA, limitadorChat } = require('./src/
 // index.js se encarga de eso; separarlo permite probar las rutas en CI (supertest).
 var app = express();
 // Detras de nginx (y de Cloudflare Tunnel) la IP real llega en X-Forwarded-For. TRUST_PROXY_HOPS es la
-// cantidad de proxies de confianza: 1 = solo nginx (por defecto); 2 = Cloudflare Tunnel + nginx.
+// cantidad de proxies de confianza: 1 = solo nginx (valor del codigo si no se define); 2 = Cloudflare Tunnel + nginx
+// (valor por defecto del compose, porque el tunel se levanta con el stack).
 // Sin esto el limitador vería a todos los clientes con la IP de nginx y compartirían un solo contador.
 app.set('trust proxy', parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1);
 //middlewares
