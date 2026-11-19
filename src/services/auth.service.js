@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
 const axios = require('axios');
+const { leerSecreto } = require('../../config/secrets');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -16,7 +17,7 @@ class AuthService {
 
     return jwt.sign(
       { id: usuario.id, email: usuario.email, rol: rolNombre },
-      process.env.JWT_SECRET,
+      leerSecreto('JWT_SECRET'),
       { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
     );
   }
