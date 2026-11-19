@@ -1,11 +1,12 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { rayuelaGeminiRequests } = require('../metrics');
+const { leerSecreto } = require('../../config/secrets');
 
 const chatService = {};
 
 chatService.consultarLibro = async (pregunta, tituloLibro, autorLibro) => {
     try {
-        const apiKey = process.env.GEMINI_API_KEY;
+        const apiKey = leerSecreto('GEMINI_API_KEY');
 
         // Si la clave no está configurada o tiene formato inválido, usar respuesta contextual amigable
         if (!apiKey || apiKey.startsWith('AQ.') || apiKey.trim() === '') {

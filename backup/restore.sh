@@ -11,6 +11,11 @@ fi
 
 . /etc/backup.env
 
+# Contraseña: Docker Secret si existe (CARD-20); si no, la variable DB_PASSWORD (compatibilidad).
+if [ -r /run/secrets/db_password ]; then
+  DB_PASSWORD="$(cat /run/secrets/db_password)"
+fi
+
 ARCHIVO="$1"
 DESTINO="${2:-${DB_NAME}_restore}"
 

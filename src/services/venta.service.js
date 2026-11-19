@@ -4,6 +4,7 @@ const Inventory = require('../models/inventory.model');
 const Reserva = require('../models/reserva.model');
 const axios = require('axios');
 const { rayuelaPaymentSuccess, rayuelaPaymentFailure } = require('../metrics');
+const { leerSecreto } = require('../../config/secrets');
 
 const ventaService = {};
 
@@ -126,7 +127,7 @@ ventaService.crearVenta = async (idUsuario, payer_email, itemsCarrito, idCupon =
         let sandboxUrlPago = null;
 
         if (itemsParaMP.length > 0) {
-            const token = process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.ACCESS_TOKEN;
+            const token = leerSecreto('MERCADOPAGO_ACCESS_TOKEN') || leerSecreto('ACCESS_TOKEN');
             if (!token) {
                 throw new Error('No se encontró el token de Mercado Pago (MERCADOPAGO_ACCESS_TOKEN) en el archivo .env');
             }

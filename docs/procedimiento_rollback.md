@@ -59,8 +59,8 @@ una variable, con un valor por defecto:
 
 | Variable | Slot | Valor por defecto |
 |---|---|---|
-| `BACKEND_BLUE_IMAGE` | blue | `rayuela-backend:1.0.0` |
-| `BACKEND_GREEN_IMAGE` | green | `rayuela-backend:1.0.0` |
+| `BACKEND_BLUE_IMAGE` | blue | `rayuela-backend:1.1.0` |
+| `BACKEND_GREEN_IMAGE` | green | `rayuela-backend:1.1.0` |
 
 Para desplegar una versión nueva **siempre se usa el slot inactivo**, y el slot activo no se
 apaga hasta validar la versión nueva:
@@ -80,6 +80,18 @@ Las imágenes publicadas por el pipeline están en
 `ghcr.io/hia-grupo7/hia-g07-backend`, con la etiqueta de versión exacta (por ejemplo
 `1.0.0-dev.5`) y la etiqueta móvil `dev` o `latest`. Para volver a una versión conocida
 conviene usar la etiqueta de versión exacta, nunca la móvil.
+
+> **Compatibilidad con los secretos (SEC-01 / CARD-20).** Desde SEC-01 el backend lee sus claves de archivos
+> (`*_FILE`, montados en `/run/secrets`) y el compose ya no le pasa `JWT_SECRET` ni `DB_PASSWORD` como variables.
+> Una imagen **anterior** a SEC-01 no sabe leer esos archivos: probada con el compose nuevo, entra en bucle de
+> reinicio con `password authentication failed for user "postgres"` (usa su valor por defecto `admin123`, que ya no
+> coincide si se rotó la clave) y, aunque conectara, no tendría `JWT_SECRET` para firmar tokens. Por eso este
+> procedimiento solo sirve para volver a versiones **desde SEC-01 en adelante**. Para una versión anterior hay que
+> pasarle las variables a mano (por ejemplo con un `docker-compose.override.yml` temporal) y volver al compose actual
+> cuanto antes.
+>
+> La etiqueta local por defecto del backend cambió a `1.1.0` en SEC-01: quien no reconstruyó la imagen recibe
+> `pull access denied for rayuela-backend` en lugar de arrancar sin avisar con una imagen vieja.
 
 ## 5. Nivel 1 — Rollback por conmutación de slot
 
@@ -173,9 +185,10 @@ una base de prueba** y validar antes de tocar la de producción:
 docker exec rayuela-backup restore.sh /backups/<archivo>.sql.gz rayuela_restore
 ```
 
-> El servicio `backup` está definido en `compose.yaml` (stack vigente) como `rayuela-backup`.
-> El script de restauración se copia a `/usr/local/bin/restore.sh` dentro del contenedor y
-> también está disponible como `restore.sh` por el `PATH`.
+> El servicio `backup` está definido en `compose.yaml` (CARD-05) como `rayuela-backup` y toma la contraseña de la base
+> del secreto `db_password` (SEC-01). El script de restauración se copia a `/usr/local/bin/restore.sh` dentro del
+> contenedor y también está disponible como `restore.sh` por el `PATH`. Antes de depender de este nivel hay que confirmar
+> que el contenedor está en ejecución (`docker ps`) y probar una restauración en una base de prueba con el comando de arriba.
 
 Un rollback de datos pierde lo escrito después del backup: decidirlo con el grupo y registrar
 la pérdida en el incidente.

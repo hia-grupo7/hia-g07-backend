@@ -25,6 +25,14 @@ const rayuelaGeminiRequests = new Counter({
     labelNames: ['status']
 });
 
+const rayuelaRateLimitHits = new Counter({
+    name: 'rayuela_rate_limit_hits_total',
+    help: 'Solicitudes bloqueadas por el limitador de velocidad (HTTP 429), por ruta',
+    labelNames: ['ruta']
+});
+// Publica las series en 0 desde el inicio: Prometheus las ve aunque todavia no haya bloqueos.
+['login', 'verificar_2fa', 'chat'].forEach((ruta) => rayuelaRateLimitHits.inc({ ruta }, 0));
+
 const rayuelaActiveReservations = new Gauge({
     name: 'rayuela_active_reservations_gauge',
     help: 'Cantidad de reservas activas vigentes en el sistema'
@@ -40,6 +48,7 @@ module.exports = {
     rayuelaPaymentSuccess,
     rayuelaPaymentFailure,
     rayuelaGeminiRequests,
+    rayuelaRateLimitHits,
     rayuelaActiveReservations,
     rayuelaOpenLibraryLatency
 };

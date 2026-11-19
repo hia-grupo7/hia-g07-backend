@@ -10,31 +10,88 @@ ciclo de vida completo: `Nueva` → `Asignada` → `Resuelta` → `Cerrada`.
 |---|---|
 | Imagen | `xlrl/mantisbt:2.28.4`, fijada por versión y por digest (no se actualiza sola). Es una imagen de la comunidad: MantisBT no tiene imagen oficial. Ver [Por qué esta imagen](#por-qué-esta-imagen). |
 | Base de datos | `mantis-db` (MariaDB 10.11) con volumen `rayuela_mantis_db_data`. |
-| Configuración | `mantis/config_inc.php`, montado dentro del contenedor (la imagen no trae uno): lee los valores sensibles de variables de entorno; no contiene secretos. |
+| Configuración | `mantis/config_inc.php`, montado dentro del contenedor (la imagen no trae uno): lee los valores sensibles de Docker Secrets (`/run/secrets`); no contiene secretos. |
 | Acceso | `http://localhost:8081`, solo desde el propio equipo (`127.0.0.1`). |
 | Red | `rayuela-network`, para que n8n (N8N-01) pueda llamar a la API de Mantis. |
 
 ## Puesta en marcha
 
-1. Definir en `.env` (ver `.env.example`): `MANTIS_DB_PASSWORD`, `MANTIS_DB_ROOT_PASSWORD`, `MANTIS_CRYPTO_SALT`
-   (cadena aleatoria larga) y, opcionalmente, `MANTIS_PORT`. El compose no trae valores por defecto: sin ellos
-   MariaDB no arranca.
-2. Levantar:
+Los comandos son los mismos en Windows, Linux y macOS y se ejecutan desde la carpeta raíz del backend. Hay dos formas de
+levantar Mantis; la instalación inicial (más abajo) es igual en las dos.
 
-   ```bash
-   docker compose --profile mantis up -d mantis-db mantis
-   ```
+### 0. Una sola vez: crear los secretos
 
-3. **Primera vez (instalación del esquema).** Por seguridad la imagen mantiene oculta la carpeta `admin/`. Para
-   instalar, definir `MANTIS_ENABLE_ADMIN=1` en `.env` y recrear el contenedor
-   (`docker compose --profile mantis up -d mantis`). Abrir `http://localhost:8081/admin/install.php`, dejar los datos
-   de conexión que ya vienen cargados, completar la contraseña de la base y, en "Admin Username/Password", usar el
-   mismo usuario `mantis` y su contraseña. Pulsar *Install/Upgrade Database*.
-4. **Cerrar la instalación (obligatorio):**
-   - Iniciar sesión con `administrator` / `root` y **cambiar esa contraseña de inmediato** (Mi cuenta).
-   - Quitar `MANTIS_ENABLE_ADMIN` del `.env` (o ponerlo en `0`) y recrear el contenedor: la imagen vuelve a ocultar
-     `admin/` sola y no hay que borrar nada a mano.
-5. Crear el proyecto **Rayuela Marketplace**, las categorías y los usuarios (ver abajo).
+`node scripts/init-secrets.js` (ver "Secretos" en el README principal) genera en `secrets/` `mantis_db_password`,
+`mantis_db_root_password` y `mantis_crypto_salt`. **Hay que crearlos antes del primer `up`**: si faltan, Compose no falla,
+arranca los servicios sin su clave y deja carpetas vacías (el script las reemplaza). Si ya tenés un volumen de Mantis, el
+script se niega a inventar claves nuevas (dejarían la base inaccesible): usá una copia cifrada
+(`scripts/backup-secrets.js`) o `--valores-actuales --env <archivo>`.
+
+### Caso A: Mantis solo (sin el resto del stack)
+
+```bash
+docker compose --profile mantis up -d mantis-db mantis
+```
+
+Solo necesita sus tres archivos de `secrets/`: Compose no exige los secretos de los servicios que no se levantan. Mantis
+queda en `http://localhost:8081` y crea la red `rayuela-network`.
+
+### Caso B: Mantis junto con el resto del stack
+
+```bash
+docker compose --profile blue --profile mantis up -d
+```
+
+Ese comando levanta también el túnel de Cloudflare (`cloudflared`), que no tiene perfil y publica solo el proxy del stack
+(CARD-15), no Mantis: Mantis escucha únicamente en `127.0.0.1`.
+
+Si el stack ya está levantado, alcanza con sumar Mantis sin tocar los demás contenedores:
+`docker compose --profile mantis up -d mantis-db mantis`. Todos comparten `rayuela-network` (n8n podrá llamar a la API de
+Mantis). Para el backend hace falta la imagen local: `docker build -t rayuela-backend:1.1.0 .`.
+
+Si el puerto 8081 está ocupado (por ejemplo, por Nextcloud), definir `MANTIS_PORT=8082` en `.env` y, para el script de carga,
+`MANTIS_URL=http://localhost:8082`.
+
+### Instalación inicial (solo la primera vez, igual en los dos casos)
+
+1. **Habilitar el instalador.** Por seguridad la imagen mantiene oculta la carpeta `admin/`. Definir
+   `MANTIS_ENABLE_ADMIN=1` en `.env` y recrear Mantis: `docker compose --profile mantis up -d mantis`.
+2. **Instalar el esquema.** Abrir `http://localhost:8081/admin/install.php`. Los datos de conexión vienen cargados (host
+   `mantis-db`, usuario `mantis`, base `bugtracker`) y la contraseña de la base aparece como `______`: **no hace falta
+   escribirla**, Mantis usa la del secreto. En "Admin Username/Password" escribir el usuario `mantis` y el contenido de
+   `secrets/mantis_db_password`. Pulsar *Install/Upgrade Database*. Debe terminar con *MantisBT was installed
+   successfully*.
+   - El aviso `POSSIBLE PROBLEM` en "Checking URL to installation" es esperable: el instalador intenta abrir
+     `localhost:<puerto>` desde dentro del contenedor, que solo escucha en el 80. No impide la instalación.
+3. **Cerrar la instalación (obligatorio).** Quitar `MANTIS_ENABLE_ADMIN` del `.env` (o ponerlo en `0`) y recrear Mantis: `admin/`
+   vuelve a quedar oculta (responde 404). Iniciar sesión con `administrator` / `root` y **cambiar esa contraseña de
+   inmediato** (Mi cuenta): `root` deja de servir.
+4. **Crear el proyecto `Rayuela Marketplace`.** Tiene que quedar con **id 1**, que es el que usa por defecto el script de carga
+   (si no, definir `MANTIS_PROJECT_ID`). Agregar sus 5 categorías en Administrar → Proyectos → Rayuela Marketplace →
+   Categorías (ver abajo); **solo se pueden crear por la interfaz**: la API REST de Mantis 2.28 no tiene ese endpoint.
+   Después crear los usuarios de trabajo (ver "Usuarios de trabajo").
+5. **Cargar las incidencias.** Crear un token en Mi cuenta → Tokens de API, guardarlo en `.env` como `MANTIS_API_TOKEN` y
+   correr `node scripts/mantis-cargar-incidencias.js` (ver "Carga de incidencias"). Quedan 13 incidencias: 8 asignadas y 5
+   cerradas.
+
+Este procedimiento se verificó desde cero con secretos, en una instalación aislada: instalación, cierre de `admin/`, inicio de
+sesión, cambio de contraseña, token de API, proyecto, categorías, usuarios y carga de las 13 incidencias (con una segunda
+ejecución que las omite por ya existir).
+
+## Qué obtiene quien levanta Mantis
+
+Mantis guarda todo (incidencias, usuarios, notas y adjuntos) en su base MariaDB, que vive en el volumen local
+`rayuela_mantis_db_data` de cada máquina. Por eso **cada persona levanta un Mantis vacío**: el repositorio solo trae
+`incidencias.json` y el script de carga.
+
+- **Instalar y cargar desde el repo** (pasos de arriba y "Carga de incidencias"): recrea las 13 incidencias con su estado,
+  responsable y notas. No trae adjuntos, fechas originales ni historial.
+- **Restaurar un volcado de la base** de quien ya la tiene armada: trae todo. Hay que pasarlo por un medio privado (contiene
+  hashes de contraseñas y tokens). Conviene usar el mismo `mantis_crypto_salt` que el volcado (reemplazar
+  `secrets/mantis_crypto_salt` por el de origen) para conservar las claves de RSS y los enlaces de confirmación pendientes,
+  pero no es obligatorio: el salt solo interviene en las sesiones, las claves de RSS y esos enlaces; no en el inicio de
+  sesión, los tokens de API ni los datos. Las contraseñas de la base no hace falta compartirlas: el volcado no las
+  incluye. (Los scripts de backup y restauración del volcado todavía no están creados.)
 
 ## Categorías
 
@@ -99,7 +156,11 @@ Para actualizar: `docker pull xlrl/mantisbt:<versión>`, copiar su digest (`dock
 - Las notificaciones por correo están desactivadas (no hay servidor SMTP configurado).
 - La imagen `xlrl` ya usa la variable `MANTIS_URL` para la dirección de descarga de Mantis; por eso la URL base del
   sistema se pasa como `MANTIS_BASE_URL`.
-- Las contraseñas de la base de Mantis siguen en variables de entorno; se migrarán a Docker Secrets junto con el
-  resto en la tarjeta SEC-01.
+- Las claves de Mantis son Docker Secrets (SEC-01). **No se rotan** con `scripts/rotate-secrets.js` (todavía no
+  está implementado ni probado). Cambiar `mantis_crypto_salt` solo cierra las sesiones e invalida enlaces de RSS y de
+  confirmación pendientes. Las contraseñas de la base, en cambio, las guarda MariaDB: si se pierden, el volumen de Mantis
+  queda inaccesible. Conviene guardar una copia cifrada de `secrets/` con `scripts/backup-secrets.js`.
+- `mantis-db` corre con el sistema de archivos en solo lectura y ambos servicios con `no-new-privileges`; el contenedor
+  web de Mantis queda escribible (escribe en `/var/www/html` y en la configuración de PHP).
 - Falta adjuntar capturas y registros como evidencia en cada incidencia y cerrar las incidencias abiertas a medida
   que se corrijan.

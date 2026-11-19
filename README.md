@@ -124,6 +124,124 @@ Se definen en `.env` (ignorado por Git). La plantilla está en [`.env.example`](
 | `MERCADOPAGO_ACCESS_TOKEN`, `ACCESS_TOKEN` | Cobros con Mercado Pago |
 | `EMAIL_USER`, `EMAIL_PASS` | Cuenta SMTP para envío de correos |
 
+### Secretos (Docker Secrets)
+
+Con Docker Compose, las contraseñas y claves **no** se leen del `.env`: cada una es un archivo de la carpeta
+`secrets/` (ignorada por Git) que el contenedor recibe en `/run/secrets/<nombre>`. Así no quedan en el
+repositorio ni se ven con `docker inspect`. **Hay que crearlos antes del primer `up`**: si faltan, Docker Compose no falla,
+solo avisa y arranca los servicios sin su clave, dejando carpetas vacías con esos nombres en `secrets/` (`init-secrets.js`
+las reemplaza por los archivos).
+
+```bash
+node scripts/init-secrets.js     # el mismo comando en Windows, Linux y macOS (requiere Node 18+)
+```
+
+- **Instalación nueva:** el script genera contraseñas aleatorias.
+- **Ya tenés volúmenes creados** (la base se inició con las contraseñas anteriores): agregá `--valores-actuales`.
+  Sin ese flag el script se niega a continuar si detecta el volumen
+  `rayuela_postgres_data`, porque una contraseña nueva dejaría al backend sin acceso a la base.
+- El script **nunca pisa** un archivo existente y toma el valor del `.env` si la variable está definida.
+- Las claves de terceros (`gemini_api_key`, `mercadopago_access_token`, `email_pass`) quedan **vacías**: pedir el
+  valor real al responsable y pegarlo en el archivo. Mientras estén vacías, el chat con IA, los cobros con Mercado
+  Pago y el envío de correos quedan deshabilitados.
+- Cambiar un archivo de `secrets/` **no** cambia la contraseña que ya guardó Postgres, Grafana, pgAdmin o MariaDB
+  en su volumen; no borres volúmenes para probarlo. Tras recrear el backend, recargá el proxy:
+  `docker exec rayuela-nginx-proxy nginx -s reload`.
+
+| Archivo en `secrets/` | Lo usan |
+|---|---|
+| `db_password` | Postgres, PgBouncer, `postgres_exporter`, backend, backup |
+| `replicator_password` | réplica de Postgres |
+| `jwt_secret` | backend (firma de tokens) |
+| `pgadmin_password`, `grafana_admin_password` | pgAdmin, Grafana |
+| `mantis_db_password`, `mantis_db_root_password`, `mantis_crypto_salt` | MantisBT y su base MariaDB |
+| `gemini_api_key`, `mercadopago_access_token`, `email_pass` | backend (claves de terceros) |
+
+Sin Docker (`npm run dev`) el backend sigue leyendo esos valores de las variables de entorno del `.env`.
+
+### Rotación de secretos
+
+Cambiar solo el archivo de `secrets/` **no** alcanza: Postgres, Grafana y pgAdmin guardan su contraseña en su volumen
+(si solo cambiás el archivo, el backend, PgBouncer y Mantis dejan de conectar). El script `scripts/rotate-secrets.js`
+cambia la clave **dentro del servicio**, escribe el archivo nuevo, recrea los contenedores que la usan y verifica que la
+nueva funcione y la anterior ya no. Si algo falla, revierte. Es el mismo comando en Windows, Linux y macOS
+(requiere Node 18+ y Docker):
+
+```bash
+node scripts/rotate-secrets.js --simular --todos          # muestra los pasos sin cambiar nada
+node scripts/rotate-secrets.js db_password                # rota uno (pide escribir SI; --si lo omite)
+node scripts/rotate-secrets.js --todos --si               # db, réplica, JWT, Grafana y pgAdmin juntos
+echo "<clave real>" | node scripts/rotate-secrets.js --poner gemini_api_key --si   # clave de terceros
+```
+
+- Rota: `db_password`, `replicator_password`, `jwt_secret`, `grafana_admin_password` y `pgadmin_password`.
+  Las claves de terceros (`gemini_api_key`, `mercadopago_access_token`, `email_pass`) se reemplazan con `--poner`.
+- **No rota los secretos de Mantis** (`mantis_db_password`, `mantis_db_root_password` y `mantis_crypto_salt`): todavía no está
+  implementado ni probado. Cambiar el salt solo cierra las sesiones e invalida los enlaces de RSS y de confirmación
+  pendientes; no afecta a los tokens de API ni a los datos.
+- Rotar `jwt_secret` cierra todas las sesiones abiertas.
+- El valor anterior se guarda en `secrets/.anteriores/` para poder volver atrás (se pierde si se borra `secrets/`).
+- Tras rotar, los "valores anteriores" de `init-secrets --valores-actuales` ya no coinciden con tu base: volvé a hacer la copia cifrada.
+
+### Copia de seguridad cifrada de `secrets/`
+
+Las claves de Mantis y las de terceros no se pueden regenerar. Guardá una copia **fuera del repositorio**:
+
+```bash
+node scripts/backup-secrets.js respaldar ../respaldo-secretos.enc    # pide una contraseña
+node scripts/backup-secrets.js restaurar ../respaldo-secretos.enc    # sin --pisar no toca archivos existentes
+```
+
+El archivo `.enc` (AES-256-GCM, no es un .zip) se abre con el mismo script. El script se niega a guardarlo dentro del repo.
+
+## Limitación de solicitudes (rate limiting)
+
+| Ruta | Límite (por IP y por minuto) | Al excederlo |
+|---|---|---|
+| `POST /api/auth/login` y `POST /api/auth/verificar-2fa` | 5 intentos **fallidos** (los correctos no cuentan) | HTTP 429 con `Retry-After` |
+| `POST /api/chat` | 10 solicitudes | HTTP 429 |
+
+Los bloqueos se cuentan en la métrica `rayuela_rate_limit_hits_total{ruta}`. Los valores se cambian con
+`RATE_LIMIT_VENTANA_MS`, `RATE_LIMIT_LOGIN_MAX` y `RATE_LIMIT_CHAT_MAX` (ver `.env.example`). Los contadores viven en la memoria
+de cada backend: blue y green no los comparten.
+
+**IP del cliente (`TRUST_PROXY_HOPS`).** El limitador cuenta por IP y la IP real llega en `X-Forwarded-For`. La cantidad de
+proxies de confianza tiene que coincidir con cómo llegan los pedidos:
+
+- `2` (por defecto en el compose): a través del túnel de Cloudflare (cloudflared + nginx). Como `cloudflared` se levanta
+  junto con el stack, no hace falta configurar nada para que funcione con la URL pública.
+- `1`: acceso directo a nginx, sin túnel.
+
+Con `1` detrás del túnel el backend ve la IP interna de Docker y todos los visitantes de internet compartirían un solo
+contador; con `2` ve la IP pública real y un `X-Forwarded-For` falso se ignora (ambos casos verificados leyendo la IP que
+registra la aplicación). Con `2` y acceso directo sin túnel, un `X-Forwarded-For` falso podría eludir el límite (deducido
+del funcionamiento de Express, no probado). Si se usa el stack sin túnel, definir `TRUST_PROXY_HOPS=1` en `.env`, recrear el
+backend (`docker compose --profile blue up -d backend-blue`) y recargar nginx
+(`docker exec rayuela-nginx-proxy nginx -s reload`).
+
+**Limitaciones.** Limitar por IP implica que cada familia de direcciones tiene su propio contador: un cliente con IPv4 e
+IPv6 (doble pila) puede alternar entre las dos y obtener el doble de cupo. Es un freno a la fuerza bruta, no una defensa
+completa.
+
+**Túnel de Cloudflare.** `cloudflared` no tiene perfil: `docker compose --profile blue up -d` lo levanta y publica el proxy del
+stack, es decir, **todo** `/api/` (incluidos `/api/metrics` y `/api/docs`). Levantalo solo el tiempo necesario y revisá antes
+qué rutas quedan públicas.
+
+## Gestión de incidencias (MantisBT)
+
+Mantis corre en el perfil `mantis` del compose, en `http://localhost:8081` (solo desde tu equipo). Sus secretos se crean
+con `node scripts/init-secrets.js` (ver arriba), **antes** del primer `up`.
+
+```bash
+# Mantis solo
+docker compose --profile mantis up -d mantis-db mantis
+# Mantis junto con el resto del stack
+docker compose --profile blue --profile mantis up -d   # incluye el túnel de Cloudflare (cloudflared no tiene perfil)
+```
+
+La primera vez hay que instalar el esquema, cerrar la instalación, crear el proyecto y cargar las incidencias: paso a paso en
+[`docs/mantis/README.md`](docs/mantis/README.md). Cada persona levanta un Mantis **vacío**: los datos viven en su volumen local.
+
 ## Scripts
 
 | Comando | Acción |

@@ -4,6 +4,11 @@ set -e
 # Cargar las variables del contenedor (cron no las hereda)
 . /etc/backup.env
 
+# Contraseña: Docker Secret si existe (CARD-20); si no, la variable DB_PASSWORD (compatibilidad).
+if [ -r /run/secrets/db_password ]; then
+  DB_PASSWORD="$(cat /run/secrets/db_password)"
+fi
+
 FECHA=$(date +%Y-%m-%d_%H%M)
 ARCHIVO="/backups/rayuela_${FECHA}.sql.gz"
 RETENCION_DIAS=7
