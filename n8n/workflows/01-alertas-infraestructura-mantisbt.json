@@ -1,0 +1,532 @@
+{
+  "updatedAt": "2026-11-19T00:33:08.279Z",
+  "createdAt": "2026-11-18T22:39:09.431Z",
+  "id": "dtGJp756UzoZE6y6",
+  "name": "N8N-01 Fl.1 - Alertas de Infraestructura (Grafana -> MantisBT -> Notificacion)",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "grafana-alerta",
+        "options": {},
+        "responseMode": "onReceived",
+        "authentication": "basicAuth"
+      },
+      "id": "8859a7ca-dd2b-4b67-ae58-30170d859113",
+      "name": "Webhook Grafana Alertas",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "grafana-alerta-5d8f2a1b9c7e",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "lMzNrpqBSKGWwYHp",
+          "name": "Grafana Webhook Basic Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const raw = items[0].json || {};\nconst payload = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst alerts = Array.isArray(payload.alerts) && payload.alerts.length ? payload.alerts : [payload];\nconst staticData = $getWorkflowStaticData('global');\nstaticData.seenAlerts = staticData.seenAlerts || {};\nconst TTL = 6 * 60 * 60 * 1000;\nconst now = Date.now();\n\nfor (const [key, ts] of Object.entries(staticData.seenAlerts)) {\n  if (!ts || now - ts > TTL) delete staticData.seenAlerts[key];\n}\n\nconst severityMap = {\n  critical: { priority: 50, severity: 70 },\n  high: { priority: 50, severity: 70 },\n  warning: { priority: 40, severity: 60 },\n  medium: { priority: 40, severity: 60 },\n  info: { priority: 30, severity: 50 },\n  low: { priority: 20, severity: 50 },\n};\n\nconst batchSeen = new Set();\nconst output = [];\n\nfor (const alert of alerts) {\n  const labelsObj = alert.labels && !Array.isArray(alert.labels) ? alert.labels : {};\n  const alertName = labelsObj.alertname || payload.title || alert.alertName || alert.title || alert.fingerprint || 'Alerta sin nombre';\n  const instancia = labelsObj.instance || alert.instance || (payload.commonLabels && payload.commonLabels.instance) || payload.instance || 'desconocida';\n  const estado = alert.status || payload.status || alert.state || payload.state || 'active';\n  const fingerprint = alert.fingerprint || payload.fingerprint || (alertName + '|' + instancia);\n\n  if (String(estado).toLowerCase() === 'resolved') {\n    delete staticData.seenAlerts[fingerprint];\n    continue;\n  }\n\n  if (batchSeen.has(fingerprint)) continue;\n  batchSeen.add(fingerprint);\n\n  const seenAt = staticData.seenAlerts[fingerprint];\n  if (seenAt && now - seenAt < TTL) continue;\n\n  const labels = Object.keys(labelsObj).length\n    ? Object.entries(labelsObj).map(([k, v]) => k + '=' + v).join(', ')\n    : (Array.isArray(alert.labels) ? alert.labels.map(l => (typeof l === 'string' ? l : (l.name || l))).join(', ') : '');\n\n  let detalle = payload.message || (alert.annotations && (alert.annotations.description || alert.annotations.summary)) || 'Sin detalles adicionales';\n  if (typeof detalle === 'string' && detalle.includes('\\n')) {\n    detalle = detalle.split('\\n')[0];\n  }\n\n  const severityRaw = String(labelsObj.severity || alert.severity || payload.severity || '').toLowerCase();\n  const sev = severityMap[severityRaw] || { priority: 30, severity: 50 };\n\n  const description = [\n    'Alerta de infraestructura detectada por Grafana.',\n    'Alerta: ' + alertName,\n    'Instancia: ' + instancia,\n    'Estado: ' + estado,\n    'Labels: ' + labels,\n    'Detalle: ' + detalle,\n    'Fingerprint: ' + fingerprint\n  ].join('\\n');\n\n  const summary = 'Alerta infraestructura: ' + alertName;\n  output.push({\n    json: Object.assign({}, payload, {\n      alertName,\n      summary,\n      description,\n      fingerprint,\n      priorityId: sev.priority,\n      severityId: sev.severity\n    })\n  });\n}\n\nreturn output;\n"
+      },
+      "id": "847d14e7-4f0b-4a78-b1e0-e5637c3b1045",
+      "name": "Enriquecer Alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mantis/api/rest/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ summary: $json.summary, description: $json.description, project: { id: 1 }, category: { id: 1 }, priority: { id: $json.priorityId }, severity: { id: $json.severityId } }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "858f999b-bb8f-40c6-a259-208d45f248ab",
+      "name": "Crear Ticket MantisBT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "EbawCtroxyTVN93A",
+          "name": "MantisBT API Token"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "nachotty2@gmail.com",
+        "toEmail": "nachotty2@gmail.com",
+        "subject": "=\"Alerta infraestructura: {{ $json.issue.summary }}\"",
+        "html": "=<div style=\"font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;\">\n  <h2 style=\"color: #d9534f; margin-top: 0;\">Notificación de Incidencia - MantisBT</h2>\n  <p style=\"margin: 5px 0;\"><b>ID de Ticket:</b> #{{ $json.issue.id }}</p>\n  <p style=\"margin: 5px 0;\"><b>Resumen:</b> {{ $json.issue.summary }}</p>\n  <hr style=\"border: none; border-top: 1px solid #eee; margin: 15px 0;\" />\n  <h3 style=\"color: #444; margin-bottom: 8px;\">Detalle de la Alerta:</h3>\n  <div style=\"background-color: #f9f9f9; padding: 12px; border-left: 4px solid #d9534f; white-space: pre-line; font-family: monospace; font-size: 13px; color: #333; border-radius: 4px;\">\n    {{ $json.issue.description }}\n  </div>\n</div>",
+        "options": {}
+      },
+      "id": "20fe7df4-f6d7-4393-a2f2-d5b2b144fbec",
+      "name": "Notificar Incidente",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        912,
+        0
+      ],
+      "webhookId": "e9e61c6a-9233-42ca-ae69-cea2da1b59fd",
+      "credentials": {
+        "smtp": {
+          "id": "Iub6j4NXSsCoqMlu",
+          "name": "SMTP Gmail Rayuela"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenAlerts = staticData.seenAlerts || {};\nconst sourceItems = $('Enriquecer Alerta').all();\nreturn items.map((item, index) => {\n  const src = sourceItems[index]?.json || {};\n  if (src.fingerprint) {\n    staticData.seenAlerts[src.fingerprint] = Date.now();\n  }\n  return item;\n});\n"
+      },
+      "id": "n8n-fl1-registrar-ticket-001",
+      "name": "Registrar Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const entries = Array.isArray(items) ? items : [items];\nfor (const item of entries) {\n  const data = item.json || {};\n  const err = data.error || data;\n  const nodeName = (data.node && data.node.name) || data.nodeName || data.node || 'desconocido';\n  console.error(JSON.stringify({\n    ts: new Date().toISOString(),\n    source: 'n8n-fl1-error-node',\n    workflow: $workflow.name,\n    executionId: $execution.id,\n    node: typeof nodeName === 'string' ? nodeName : JSON.stringify(nodeName),\n    message: err.message || String(err),\n    description: err.description || null,\n    stack: err.stack || null,\n    fingerprint: data.fingerprint || null\n  }, null, 2));\n}\nreturn [];\n"
+      },
+      "id": "n8n-fl1-error-001",
+      "name": "Registrar Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        456,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Grafana Alertas": {
+      "main": [
+        [
+          {
+            "node": "Enriquecer Alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enriquecer Alerta": {
+      "main": [
+        [
+          {
+            "node": "Crear Ticket MantisBT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear Ticket MantisBT": {
+      "main": [
+        [
+          {
+            "node": "Registrar Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Ticket": {
+      "main": [
+        [
+          {
+            "node": "Notificar Incidente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notificar Incidente": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Error": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "errorWorkflow": "ncCuil3GfmQzaetM"
+  },
+  "staticData": {
+    "global": {
+      "seenAlerts": {
+        "Alerta sin nombre|desconocida": 1795048424684,
+        "hia-test-flow-20261119003640": 1795048641142,
+        "hia-test-multi-warn-20261119003734": 1795048658586,
+        "hia-test-multi-info-20261119003734": 1795048658586
+      }
+    }
+  },
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "b376b78a-1048-4b27-8902-eb53e592cbf4",
+  "activeVersionId": "b376b78a-1048-4b27-8902-eb53e592cbf4",
+  "versionCounter": 17,
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-11-18T22:39:09.436Z",
+      "createdAt": "2026-11-18T22:39:09.436Z",
+      "role": "workflow:owner",
+      "workflowId": "dtGJp756UzoZE6y6",
+      "projectId": "VTQWJaPVK2Yfuq3J",
+      "project": {
+        "updatedAt": "2026-11-18T20:41:34.603Z",
+        "createdAt": "2026-11-18T06:51:59.315Z",
+        "id": "VTQWJaPVK2Yfuq3J",
+        "name": "N8N n8n <n8n@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "a41d6fd6-f988-49b8-8646-b047c8d8d3eb"
+      }
+    }
+  ],
+  "tags": [],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-11-19T00:33:08.352Z",
+    "createdAt": "2026-11-19T00:33:08.352Z",
+    "versionId": "b376b78a-1048-4b27-8902-eb53e592cbf4",
+    "workflowId": "dtGJp756UzoZE6y6",
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "grafana-alerta",
+          "options": {},
+          "responseMode": "onReceived",
+          "authentication": "basicAuth"
+        },
+        "id": "8859a7ca-dd2b-4b67-ae58-30170d859113",
+        "name": "Webhook Grafana Alertas",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          0,
+          0
+        ],
+        "webhookId": "grafana-alerta-5d8f2a1b9c7e",
+        "credentials": {
+          "httpBasicAuth": {
+            "id": "lMzNrpqBSKGWwYHp",
+            "name": "Grafana Webhook Basic Auth"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "const raw = items[0].json || {};\nconst payload = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst alerts = Array.isArray(payload.alerts) && payload.alerts.length ? payload.alerts : [payload];\nconst staticData = $getWorkflowStaticData('global');\nstaticData.seenAlerts = staticData.seenAlerts || {};\nconst TTL = 6 * 60 * 60 * 1000;\nconst now = Date.now();\n\nfor (const [key, ts] of Object.entries(staticData.seenAlerts)) {\n  if (!ts || now - ts > TTL) delete staticData.seenAlerts[key];\n}\n\nconst severityMap = {\n  critical: { priority: 50, severity: 70 },\n  high: { priority: 50, severity: 70 },\n  warning: { priority: 40, severity: 60 },\n  medium: { priority: 40, severity: 60 },\n  info: { priority: 30, severity: 50 },\n  low: { priority: 20, severity: 50 },\n};\n\nconst batchSeen = new Set();\nconst output = [];\n\nfor (const alert of alerts) {\n  const labelsObj = alert.labels && !Array.isArray(alert.labels) ? alert.labels : {};\n  const alertName = labelsObj.alertname || payload.title || alert.alertName || alert.title || alert.fingerprint || 'Alerta sin nombre';\n  const instancia = labelsObj.instance || alert.instance || (payload.commonLabels && payload.commonLabels.instance) || payload.instance || 'desconocida';\n  const estado = alert.status || payload.status || alert.state || payload.state || 'active';\n  const fingerprint = alert.fingerprint || payload.fingerprint || (alertName + '|' + instancia);\n\n  if (String(estado).toLowerCase() === 'resolved') {\n    delete staticData.seenAlerts[fingerprint];\n    continue;\n  }\n\n  if (batchSeen.has(fingerprint)) continue;\n  batchSeen.add(fingerprint);\n\n  const seenAt = staticData.seenAlerts[fingerprint];\n  if (seenAt && now - seenAt < TTL) continue;\n\n  const labels = Object.keys(labelsObj).length\n    ? Object.entries(labelsObj).map(([k, v]) => k + '=' + v).join(', ')\n    : (Array.isArray(alert.labels) ? alert.labels.map(l => (typeof l === 'string' ? l : (l.name || l))).join(', ') : '');\n\n  let detalle = payload.message || (alert.annotations && (alert.annotations.description || alert.annotations.summary)) || 'Sin detalles adicionales';\n  if (typeof detalle === 'string' && detalle.includes('\\n')) {\n    detalle = detalle.split('\\n')[0];\n  }\n\n  const severityRaw = String(labelsObj.severity || alert.severity || payload.severity || '').toLowerCase();\n  const sev = severityMap[severityRaw] || { priority: 30, severity: 50 };\n\n  const description = [\n    'Alerta de infraestructura detectada por Grafana.',\n    'Alerta: ' + alertName,\n    'Instancia: ' + instancia,\n    'Estado: ' + estado,\n    'Labels: ' + labels,\n    'Detalle: ' + detalle,\n    'Fingerprint: ' + fingerprint\n  ].join('\\n');\n\n  const summary = 'Alerta infraestructura: ' + alertName;\n  output.push({\n    json: Object.assign({}, payload, {\n      alertName,\n      summary,\n      description,\n      fingerprint,\n      priorityId: sev.priority,\n      severityId: sev.severity\n    })\n  });\n}\n\nreturn output;\n"
+        },
+        "id": "847d14e7-4f0b-4a78-b1e0-e5637c3b1045",
+        "name": "Enriquecer Alerta",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          304,
+          0
+        ],
+        "onError": "continueErrorOutput"
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://mantis/api/rest/issues",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ summary: $json.summary, description: $json.description, project: { id: 1 }, category: { id: 1 }, priority: { id: $json.priorityId }, severity: { id: $json.severityId } }) }}",
+          "options": {
+            "timeout": 15000
+          }
+        },
+        "id": "858f999b-bb8f-40c6-a259-208d45f248ab",
+        "name": "Crear Ticket MantisBT",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          608,
+          0
+        ],
+        "credentials": {
+          "httpHeaderAuth": {
+            "id": "EbawCtroxyTVN93A",
+            "name": "MantisBT API Token"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput"
+      },
+      {
+        "parameters": {
+          "fromEmail": "nachotty2@gmail.com",
+          "toEmail": "nachotty2@gmail.com",
+          "subject": "=\"Alerta infraestructura: {{ $json.issue.summary }}\"",
+          "html": "=<div style=\"font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;\">\n  <h2 style=\"color: #d9534f; margin-top: 0;\">Notificación de Incidencia - MantisBT</h2>\n  <p style=\"margin: 5px 0;\"><b>ID de Ticket:</b> #{{ $json.issue.id }}</p>\n  <p style=\"margin: 5px 0;\"><b>Resumen:</b> {{ $json.issue.summary }}</p>\n  <hr style=\"border: none; border-top: 1px solid #eee; margin: 15px 0;\" />\n  <h3 style=\"color: #444; margin-bottom: 8px;\">Detalle de la Alerta:</h3>\n  <div style=\"background-color: #f9f9f9; padding: 12px; border-left: 4px solid #d9534f; white-space: pre-line; font-family: monospace; font-size: 13px; color: #333; border-radius: 4px;\">\n    {{ $json.issue.description }}\n  </div>\n</div>",
+          "options": {}
+        },
+        "id": "20fe7df4-f6d7-4393-a2f2-d5b2b144fbec",
+        "name": "Notificar Incidente",
+        "type": "n8n-nodes-base.emailSend",
+        "typeVersion": 2.1,
+        "position": [
+          912,
+          0
+        ],
+        "webhookId": "e9e61c6a-9233-42ca-ae69-cea2da1b59fd",
+        "credentials": {
+          "smtp": {
+            "id": "Iub6j4NXSsCoqMlu",
+            "name": "SMTP Gmail Rayuela"
+          }
+        },
+        "retryOnFail": true,
+        "maxTries": 3,
+        "waitBetweenTries": 5000,
+        "onError": "continueErrorOutput"
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenAlerts = staticData.seenAlerts || {};\nconst sourceItems = $('Enriquecer Alerta').all();\nreturn items.map((item, index) => {\n  const src = sourceItems[index]?.json || {};\n  if (src.fingerprint) {\n    staticData.seenAlerts[src.fingerprint] = Date.now();\n  }\n  return item;\n});\n"
+        },
+        "id": "n8n-fl1-registrar-ticket-001",
+        "name": "Registrar Ticket",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          760,
+          0
+        ],
+        "onError": "continueErrorOutput"
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "const entries = Array.isArray(items) ? items : [items];\nfor (const item of entries) {\n  const data = item.json || {};\n  const err = data.error || data;\n  const nodeName = (data.node && data.node.name) || data.nodeName || data.node || 'desconocido';\n  console.error(JSON.stringify({\n    ts: new Date().toISOString(),\n    source: 'n8n-fl1-error-node',\n    workflow: $workflow.name,\n    executionId: $execution.id,\n    node: typeof nodeName === 'string' ? nodeName : JSON.stringify(nodeName),\n    message: err.message || String(err),\n    description: err.description || null,\n    stack: err.stack || null,\n    fingerprint: data.fingerprint || null\n  }, null, 2));\n}\nreturn [];\n"
+        },
+        "id": "n8n-fl1-error-001",
+        "name": "Registrar Error",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          456,
+          220
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Grafana Alertas": {
+        "main": [
+          [
+            {
+              "node": "Enriquecer Alerta",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Enriquecer Alerta": {
+        "main": [
+          [
+            {
+              "node": "Crear Ticket MantisBT",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Registrar Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Crear Ticket MantisBT": {
+        "main": [
+          [
+            {
+              "node": "Registrar Ticket",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Registrar Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Registrar Ticket": {
+        "main": [
+          [
+            {
+              "node": "Notificar Incidente",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Registrar Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Notificar Incidente": {
+        "main": [
+          [],
+          [
+            {
+              "node": "Registrar Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Registrar Error": {
+        "main": [
+          []
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "N8N n8n",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-11-19T00:33:17.402Z",
+        "id": 16,
+        "workflowId": "dtGJp756UzoZE6y6",
+        "versionId": "b376b78a-1048-4b27-8902-eb53e592cbf4",
+        "event": "activated",
+        "userId": "a41d6fd6-f988-49b8-8646-b047c8d8d3eb"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:delete",
+    "execution:list",
+    "execution:read",
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:import",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "e1e247811020d144d4d6210d93cbafc5c1b8dfecac9b6cec4cf4ae493f04428e"
+}
