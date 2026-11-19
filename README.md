@@ -194,6 +194,38 @@ node scripts/backup-secrets.js restaurar ../respaldo-secretos.enc    # sin --pis
 
 El archivo `.enc` (AES-256-GCM, no es un .zip) se abre con el mismo script. El script se niega a guardarlo dentro del repo.
 
+## Limitación de solicitudes (rate limiting)
+
+| Ruta | Límite (por IP y por minuto) | Al excederlo |
+|---|---|---|
+| `POST /api/auth/login` y `POST /api/auth/verificar-2fa` | 5 intentos **fallidos** (los correctos no cuentan) | HTTP 429 con `Retry-After` |
+| `POST /api/chat` | 10 solicitudes | HTTP 429 |
+
+Los bloqueos se cuentan en la métrica `rayuela_rate_limit_hits_total{ruta}`. Los valores se cambian con
+`RATE_LIMIT_VENTANA_MS`, `RATE_LIMIT_LOGIN_MAX` y `RATE_LIMIT_CHAT_MAX` (ver `.env.example`). Los contadores viven en la memoria
+de cada backend: blue y green no los comparten.
+
+**IP del cliente (`TRUST_PROXY_HOPS`).** El limitador cuenta por IP y la IP real llega en `X-Forwarded-For`. La cantidad de
+proxies de confianza tiene que coincidir con cómo llegan los pedidos:
+
+- `1` (por defecto): acceso directo a nginx, sin túnel.
+- `2`: a través del túnel de Cloudflare (cloudflared + nginx).
+
+Con `1` detrás del túnel el backend ve la IP interna de Docker y todos los visitantes de internet compartirían un solo
+contador; con `2` ve la IP pública real y un `X-Forwarded-For` falso se ignora (ambos casos verificados leyendo la IP que
+registra la aplicación). Mientras el túnel esté levantado, definir `TRUST_PROXY_HOPS=2` en `.env`, recrear el backend
+(`docker compose --profile blue up -d backend-blue`) y recargar nginx (`docker exec rayuela-nginx-proxy nginx -s reload`);
+volver a `1` al apagarlo. Con `2` y acceso directo sin túnel, un `X-Forwarded-For` falso podría eludir el límite (deducido
+del funcionamiento de Express, no probado).
+
+**Limitaciones.** Limitar por IP implica que cada familia de direcciones tiene su propio contador: un cliente con IPv4 e
+IPv6 (doble pila) puede alternar entre las dos y obtener el doble de cupo. Es un freno a la fuerza bruta, no una defensa
+completa.
+
+**Túnel de Cloudflare.** `cloudflared` no tiene perfil: `docker compose --profile blue up -d` lo levanta y publica el proxy del
+stack, es decir, **todo** `/api/` (incluidos `/api/metrics` y `/api/docs`). Levantalo solo el tiempo necesario y revisá antes
+qué rutas quedan públicas.
+
 ## Gestión de incidencias (MantisBT)
 
 Mantis corre en el perfil `mantis` del compose, en `http://localhost:8081` (solo desde tu equipo). Sus secretos se crean

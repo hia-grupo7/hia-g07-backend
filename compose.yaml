@@ -384,6 +384,11 @@ services:
   cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: rayuela-tunnel
+    # Endurecimiento (CARD-20): sin privilegios nuevos y sistema de archivos de solo lectura. Probado: registra el túnel
+    # y corre como usuario sin privilegios.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     restart: unless-stopped
     command: >-
       tunnel
