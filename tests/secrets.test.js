@@ -56,6 +56,17 @@ describe('leerSecreto (Docker Secrets)', () => {
     aviso.mockRestore();
   });
 
+  test('si la ruta es una carpeta (la crea Docker cuando falta el archivo) usa la variable y avisa', () => {
+    const aviso = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const carpetaDeDocker = path.join(carpeta, 'carpeta');
+    fs.mkdirSync(carpetaDeDocker);
+    process.env.PRUEBA_SECRETO = 'valor-de-la-variable';
+    process.env.PRUEBA_SECRETO_FILE = carpetaDeDocker;
+    expect(leerSecreto('PRUEBA_SECRETO')).toBe('valor-de-la-variable');
+    expect(aviso).toHaveBeenCalledTimes(1);
+    aviso.mockRestore();
+  });
+
   test('sin archivo ni variable devuelve undefined', () => {
     expect(leerSecreto('PRUEBA_SECRETO')).toBeUndefined();
   });

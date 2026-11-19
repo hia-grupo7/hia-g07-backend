@@ -66,6 +66,12 @@ function volumenExiste(nombre) {
   return !r.error && r.status === 0; // sin Docker instalado no hay volúmenes que proteger
 }
 
+// Docker Compose no falla cuando falta el archivo de un secreto: avisa y crea una CARPETA vacía con ese nombre.
+// Por eso "existe" no alcanza: hay que distinguir un archivo de una carpeta.
+function estadoRuta(ruta) {
+  try { return fs.statSync(ruta).isDirectory() ? 'carpeta' : 'archivo'; } catch { return 'nada'; }
+}
+
 function leerEnv(archivo, variable) {
   if (!fs.existsSync(archivo)) return '';
   for (const linea of fs.readFileSync(archivo, 'utf8').split('\n')) {
@@ -112,7 +118,7 @@ Generar valores nuevos haría que el backend no pueda conectarse a esa base.
 
   // Protección 2: las claves de Mantis no tienen un valor anterior que reconstruir.
   if (!o.nuevos && volumenExiste('rayuela_mantis_db_data')) {
-    const faltan = SECRETOS.filter((s) => s.mantis && !fs.existsSync(path.join(o.dir, s.nombre)) && !valorDelEnv(s)).map((s) => s.nombre);
+    const faltan = SECRETOS.filter((s) => s.mantis && estadoRuta(path.join(o.dir, s.nombre)) !== 'archivo' && !valorDelEnv(s)).map((s) => s.nombre);
     if (faltan.length) {
       err(`Ya existe el volumen rayuela_mantis_db_data (Mantis tiene datos) y faltan claves que no se pueden reconstruir:
   ${faltan.join(' ')}
@@ -124,6 +130,15 @@ Si se generaran al azar, Mantis dejaría de poder conectarse a su base. Recupera
     }
   }
 
+  const conContenido = SECRETOS.map((s) => path.join(o.dir, s.nombre))
+    .filter((p) => estadoRuta(p) === 'carpeta' && fs.readdirSync(p).length > 0);
+  if (conContenido.length) {
+    err(`Estas rutas son carpetas con contenido (deberían ser archivos de secretos): no se cambió nada.
+  ${conContenido.join('\n  ')}
+Revisalas y borralas a mano antes de volver a ejecutar el script.`);
+    return 1;
+  }
+
   fs.mkdirSync(o.dir, { recursive: true });
   try { fs.chmodSync(o.dir, 0o755); } catch { /* Windows: no aplica */ }
 
@@ -133,7 +148,8 @@ Si se generaran al azar, Mantis dejaría de poder conectarse a su base. Recupera
   const vacios = [];
   for (const s of SECRETOS) {
     const archivo = path.join(o.dir, s.nombre);
-    if (fs.existsSync(archivo)) {
+    const estado = estadoRuta(archivo);
+    if (estado === 'archivo') {
       log(`  = ${s.nombre.padEnd(26)} ya existe, no se modifica`);
       existentes++;
       continue;
@@ -145,6 +161,8 @@ Si se generaran al azar, Mantis dejaría de poder conectarse a su base. Recupera
     else if (s.tipo === 'tercero') { origen = 'vacío: falta la clave real'; vacios.push(s.nombre); }
     else if (o.actuales && s.anterior) { valor = s.anterior; origen = 'valor anterior del compose'; }
     else { valor = generar(s.largo); origen = 'generado al azar'; }
+    // Una carpeta vacía en lugar del archivo es lo que deja Docker Compose si se hizo "up" antes de crear los secretos.
+    if (estado === 'carpeta') { fs.rmdirSync(archivo); origen += '; reemplaza una carpeta vacía que creó Docker'; }
     // Sin salto de línea final y con permisos de lectura: algunos contenedores no corren como root.
     fs.writeFileSync(archivo, valor, { mode: 0o644 });
     log(`  + ${s.nombre.padEnd(26)} creado (${origen})`);

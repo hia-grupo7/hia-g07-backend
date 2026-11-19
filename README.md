@@ -128,7 +128,9 @@ Se definen en `.env` (ignorado por Git). La plantilla está en [`.env.example`](
 
 Con Docker Compose, las contraseñas y claves **no** se leen del `.env`: cada una es un archivo de la carpeta
 `secrets/` (ignorada por Git) que el contenedor recibe en `/run/secrets/<nombre>`. Así no quedan en el
-repositorio ni se ven con `docker inspect`. Sin esos archivos el stack no arranca.
+repositorio ni se ven con `docker inspect`. **Hay que crearlos antes del primer `up`**: si faltan, Docker Compose no falla,
+solo avisa y arranca los servicios sin su clave, dejando carpetas vacías con esos nombres en `secrets/` (`init-secrets.js`
+las reemplaza por los archivos).
 
 ```bash
 node scripts/init-secrets.js     # el mismo comando en Windows, Linux y macOS (requiere Node 18+)
@@ -174,7 +176,9 @@ echo "<clave real>" | node scripts/rotate-secrets.js --poner gemini_api_key --si
 
 - Rota: `db_password`, `replicator_password`, `jwt_secret`, `grafana_admin_password` y `pgadmin_password`.
   Las claves de terceros (`gemini_api_key`, `mercadopago_access_token`, `email_pass`) se reemplazan con `--poner`.
-- **No rota los secretos de Mantis**: `mantis_crypto_salt` debe ser el mismo en todo el grupo.
+- **No rota los secretos de Mantis** (`mantis_db_password`, `mantis_db_root_password` y `mantis_crypto_salt`): todavía no está
+  implementado ni probado. Cambiar el salt solo cierra las sesiones e invalida los enlaces de RSS y de confirmación
+  pendientes; no afecta a los tokens de API ni a los datos.
 - Rotar `jwt_secret` cierra todas las sesiones abiertas.
 - El valor anterior se guarda en `secrets/.anteriores/` para poder volver atrás (se pierde si se borra `secrets/`).
 - Tras rotar, los "valores anteriores" de `init-secrets --valores-actuales` ya no coinciden con tu base: volvé a hacer la copia cifrada.

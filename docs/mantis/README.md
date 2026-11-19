@@ -17,7 +17,7 @@ ciclo de vida completo: `Nueva` → `Asignada` → `Resuelta` → `Cerrada`.
 ## Puesta en marcha
 
 1. Crear los secretos (ver "Secretos" en el README principal): `node scripts/init-secrets.js`. Genera en `secrets/`
-   `mantis_db_password`, `mantis_db_root_password` y `mantis_crypto_salt`. Sin esos archivos el compose no arranca. Si ya
+   `mantis_db_password`, `mantis_db_root_password` y `mantis_crypto_salt`. Hay que crearlos antes del primer `up`: si faltan, Compose arranca los servicios sin su clave y deja carpetas vacías. Si ya
    tenés un volumen de Mantis, el script se niega a inventar claves nuevas (dejarían la base inaccesible): usá una
    copia cifrada (`scripts/backup-secrets.js`) o `--valores-actuales --env <archivo>`. Opcionalmente, definir
    `MANTIS_PORT` en `.env` (no es un secreto).
@@ -47,9 +47,11 @@ Mantis guarda todo (incidencias, usuarios, notas y adjuntos) en su base MariaDB,
 - **Instalar y cargar desde el repo** (pasos de arriba y "Carga de incidencias"): recrea las 13 incidencias con su estado,
   responsable y notas. No trae adjuntos, fechas originales ni historial.
 - **Restaurar un volcado de la base** de quien ya la tiene armada: trae todo. Hay que pasarlo por un medio privado (contiene
-  hashes de contraseñas y tokens) y usar **el mismo `mantis_crypto_salt`** que el volcado: reemplazar `secrets/mantis_crypto_salt`
-  por el de origen. Las contraseñas de la base no hace falta compartirlas: el volcado no las incluye. (Los scripts de
-  backup y restauración del volcado todavía no están creados.)
+  hashes de contraseñas y tokens). Conviene usar el mismo `mantis_crypto_salt` que el volcado (reemplazar
+  `secrets/mantis_crypto_salt` por el de origen) para conservar las claves de RSS y los enlaces de confirmación pendientes,
+  pero no es obligatorio: el salt solo interviene en las sesiones, las claves de RSS y esos enlaces; no en el inicio de
+  sesión, los tokens de API ni los datos. Las contraseñas de la base no hace falta compartirlas: el volcado no las
+  incluye. (Los scripts de backup y restauración del volcado todavía no están creados.)
 
 ## Categorías
 
@@ -114,9 +116,10 @@ Para actualizar: `docker pull xlrl/mantisbt:<versión>`, copiar su digest (`dock
 - Las notificaciones por correo están desactivadas (no hay servidor SMTP configurado).
 - La imagen `xlrl` ya usa la variable `MANTIS_URL` para la dirección de descarga de Mantis; por eso la URL base del
   sistema se pasa como `MANTIS_BASE_URL`.
-- Las claves de Mantis son Docker Secrets (SEC-01). **No se rotan** con `scripts/rotate-secrets.js`: el
-  `mantis_crypto_salt` tiene que ser el mismo en todo el grupo. Conviene guardar una copia cifrada de `secrets/` con
-  `scripts/backup-secrets.js`: si se pierden, el volumen de Mantis queda inaccesible.
+- Las claves de Mantis son Docker Secrets (SEC-01). **No se rotan** con `scripts/rotate-secrets.js` (todavía no
+  está implementado ni probado). Cambiar `mantis_crypto_salt` solo cierra las sesiones e invalida enlaces de RSS y de
+  confirmación pendientes. Las contraseñas de la base, en cambio, las guarda MariaDB: si se pierden, el volumen de Mantis
+  queda inaccesible. Conviene guardar una copia cifrada de `secrets/` con `scripts/backup-secrets.js`.
 - `mantis-db` corre con el sistema de archivos en solo lectura y ambos servicios con `no-new-privileges`; el contenedor
   web de Mantis queda escribible (escribe en `/var/www/html` y en la configuración de PHP).
 - Falta adjuntar capturas y registros como evidencia en cada incidencia y cerrar las incidencias abiertas a medida
