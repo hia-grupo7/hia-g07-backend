@@ -194,6 +194,21 @@ node scripts/backup-secrets.js restaurar ../respaldo-secretos.enc    # sin --pis
 
 El archivo `.enc` (AES-256-GCM, no es un .zip) se abre con el mismo script. El script se niega a guardarlo dentro del repo.
 
+## Gestión de incidencias (MantisBT)
+
+Mantis corre en el perfil `mantis` del compose, en `http://localhost:8081` (solo desde tu equipo). Sus secretos se crean
+con `node scripts/init-secrets.js` (ver arriba), **antes** del primer `up`.
+
+```bash
+# Mantis solo
+docker compose --profile mantis up -d mantis-db mantis
+# Mantis junto con el resto del stack
+docker compose --profile blue --profile mantis up -d   # incluye el túnel de Cloudflare (cloudflared no tiene perfil)
+```
+
+La primera vez hay que instalar el esquema, cerrar la instalación, crear el proyecto y cargar las incidencias: paso a paso en
+[`docs/mantis/README.md`](docs/mantis/README.md). Cada persona levanta un Mantis **vacío**: los datos viven en su volumen local.
+
 ## Scripts
 
 | Comando | Acción |
