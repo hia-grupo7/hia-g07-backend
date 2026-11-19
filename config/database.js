@@ -1,7 +1,9 @@
 const { Sequelize } = require('sequelize');
+const { leerSecreto } = require('./secrets');
 
 const dbUser = process.env.DB_USER || 'postgres';
-const dbPass = process.env.DB_PASSWORD || 'admin123';
+const dbPass = leerSecreto('DB_PASSWORD');
+if (!dbPass) console.error('DB_PASSWORD no está configurada (ni como secreto ni como variable de entorno).');
 const dbName = process.env.DB_NAME || 'postgres';
 
 // Configuración de Read/Write Splitting para Alta Disponibilidad

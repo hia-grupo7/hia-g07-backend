@@ -22,6 +22,33 @@ networks:
     name: rayuela-network
     driver: bridge
 
+# Docker Secrets (CARD-20 / SEC-01): cada secreto es un archivo de ./secrets (ignorado por git).
+# Se crean con "node scripts/init-secrets.js" (el mismo comando en Windows, Linux y macOS).
+# Dentro del contenedor aparecen en /run/secrets/<nombre>; no se ven con "docker inspect".
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  replicator_password:
+    file: ./secrets/replicator_password
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  pgadmin_password:
+    file: ./secrets/pgadmin_password
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
+  mantis_db_password:
+    file: ./secrets/mantis_db_password
+  mantis_db_root_password:
+    file: ./secrets/mantis_db_root_password
+  mantis_crypto_salt:
+    file: ./secrets/mantis_crypto_salt
+  gemini_api_key:
+    file: ./secrets/gemini_api_key
+  mercadopago_access_token:
+    file: ./secrets/mercadopago_access_token
+  email_pass:
+    file: ./secrets/email_pass
+
 volumes:
   postgres_data:
     name: rayuela_postgres_data
@@ -47,14 +74,22 @@ services:
   postgres-primary:
     image: postgres:16-alpine
     container_name: rayuela-db-primary
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run/postgresql
+      - /tmp
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME:-postgres}
       POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - db_password
     networks:
       - rayuela-network
     # Seguridad CARD-15: La base de datos es 100% privada dentro de rayuela-network.
@@ -73,9 +108,15 @@ services:
   postgres-replica:
     image: postgres:16-alpine
     container_name: rayuela-db-replica
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run/postgresql
+      - /tmp
     restart: unless-stopped
-    environment:
-      PGPASSWORD: ${REPLICATOR_PASSWORD:-replicator123}
+    secrets:
+      - replicator_password
     networks:
       - rayuela-network
     ports:
@@ -86,7 +127,7 @@ services:
     command: >
       sh -c "
       rm -rf /var/lib/postgresql/data/* &&
-      until pg_basebackup -h postgres-primary -U replicator -D /var/lib/postgresql/data -P -Xs -R --checkpoint=fast; do
+      until PGPASSWORD=$$(cat /run/secrets/replicator_password) pg_basebackup -h postgres-primary -U replicator -D /var/lib/postgresql/data -P -Xs -R --checkpoint=fast; do
         echo 'Esperando al nodo primario para clonar catálogo...'; sleep 3;
       done &&
       chown -R postgres:postgres /var/lib/postgresql/data &&
@@ -100,10 +141,25 @@ services:
   pgbouncer:
     image: edoburu/pgbouncer:latest
     container_name: rayuela-pgbouncer
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /etc/pgbouncer:uid=70,gid=70,mode=0755
+      - /tmp
     restart: unless-stopped
+    # La imagen no lee DB_PASSWORD_FILE: el envoltorio carga el secreto solo en el entorno
+    # del proceso de PgBouncer (no aparece en "docker inspect").
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export DB_PASSWORD="$$(cat /run/secrets/db_password)" && exec /entrypoint.sh "$$@"
+      - --
+    command: ["/usr/bin/pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    secrets:
+      - db_password
     environment:
       DB_USER: postgres
-      DB_PASSWORD: ${DB_PASSWORD:-admin123}
       DB_HOST: postgres-primary
       DB_NAME: ${DB_NAME:-postgres}
       AUTH_TYPE: scram-sha-256
@@ -122,15 +178,19 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: rayuela-pgadmin
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@rayuela.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-pgadmin_rayuela_2024}
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
       PGADMIN_CONFIG_SERVER_MODE: "True"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
       - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    secrets:
+      - pgadmin_password
     networks:
       - rayuela-network
     ports:
@@ -150,15 +210,23 @@ services:
   # ===========================================================================
 
   backend-blue:
-    image: ${BACKEND_BLUE_IMAGE:-rayuela-backend:1.0.0}
+    # Imagen local del backend. Si "docker compose up" falla con "pull access denied for rayuela-backend",
+    # falta construirla:  docker build -t rayuela-backend:1.1.0 .   (o definir BACKEND_BLUE_IMAGE con otra imagen).
+    image: ${BACKEND_BLUE_IMAGE:-rayuela-backend:1.1.0}
     container_name: rayuela-backend-blue
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     profiles:
       - blue
-    env_file:
-      - .env
+    # Sin env_file: el backend solo recibe lo que se declara aqui (los secretos van por /run/secrets).
     environment:
       NODE_ENV: production
+      EMAIL_USER: ${EMAIL_USER:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PORT: 3000
       DB_HOST: postgres-primary
       DB_PORT: 5432
@@ -166,10 +234,20 @@ services:
       DB_READ_PORT: 5432
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-admin123}
-      JWT_SECRET: ${JWT_SECRET:-MiClaveSecretaSuperDificilDeAdivinarRayuela123!}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
+      EMAIL_PASS_FILE: /run/secrets/email_pass
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       SLOT: blue
+    secrets:
+      - db_password
+      - jwt_secret
+      - gemini_api_key
+      - mercadopago_access_token
+      - email_pass
     networks:
       - rayuela-network
     expose:
@@ -189,15 +267,23 @@ services:
   # ===========================================================================
 
   backend-green:
-    image: ${BACKEND_GREEN_IMAGE:-rayuela-backend:1.0.0}
+    # Imagen local del backend. Si "docker compose up" falla con "pull access denied for rayuela-backend",
+    # falta construirla:  docker build -t rayuela-backend:1.1.0 .   (o definir BACKEND_GREEN_IMAGE con otra imagen).
+    image: ${BACKEND_GREEN_IMAGE:-rayuela-backend:1.1.0}
     container_name: rayuela-backend-green
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     profiles:
       - green
-    env_file:
-      - .env
+    # Sin env_file: el backend solo recibe lo que se declara aqui (los secretos van por /run/secrets).
     environment:
       NODE_ENV: production
+      EMAIL_USER: ${EMAIL_USER:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PORT: 3000
       DB_HOST: postgres-primary
       DB_PORT: 5432
@@ -205,10 +291,20 @@ services:
       DB_READ_PORT: 5432
       DB_NAME: ${DB_NAME:-postgres}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-admin123}
-      JWT_SECRET: ${JWT_SECRET:-MiClaveSecretaSuperDificilDeAdivinarRayuela123!}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
+      EMAIL_PASS_FILE: /run/secrets/email_pass
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
       SLOT: green
+    secrets:
+      - db_password
+      - jwt_secret
+      - gemini_api_key
+      - mercadopago_access_token
+      - email_pass
     networks:
       - rayuela-network
     expose:
@@ -230,6 +326,13 @@ services:
   frontend:
     image: rayuela-frontend:1.0.0
     container_name: rayuela-frontend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/cache/nginx
+      - /tmp
     restart: unless-stopped
     networks:
       - rayuela-network
@@ -249,6 +352,13 @@ services:
   nginx-proxy:
     image: nginx:alpine
     container_name: rayuela-nginx-proxy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/cache/nginx
+      - /tmp
     restart: unless-stopped
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
@@ -292,6 +402,9 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: rayuela-prometheus
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     restart: unless-stopped
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -310,6 +423,11 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: rayuela-grafana
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     ports:
       - "127.0.0.1:3001:3000"
@@ -319,7 +437,9 @@ services:
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
+    secrets:
+      - grafana_admin_password
     networks:
       - rayuela-network
     depends_on:
@@ -328,6 +448,11 @@ services:
   loki:
     image: grafana/loki:latest
     container_name: rayuela-loki
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     command:
       - '-config.file=/etc/loki/loki.yml'
@@ -342,6 +467,11 @@ services:
   promtail:
     image: grafana/promtail:3.0.0
     container_name: rayuela-promtail
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     restart: unless-stopped
     command:
       - '-config.file=/etc/promtail/config.yml'
@@ -357,6 +487,9 @@ services:
   node_exporter:
     image: prom/node-exporter:latest
     container_name: rayuela-node-exporter
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     restart: unless-stopped
     command:
       - '--path.rootfs=/host'
@@ -370,6 +503,9 @@ services:
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: rayuela-cadvisor
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
@@ -385,9 +521,16 @@ services:
   postgres_exporter:
     image: prometheuscommunity/postgres-exporter:latest
     container_name: rayuela-postgres-exporter
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_NAME=postgresql://${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres-primary:5432/${DB_NAME:-postgres}?sslmode=disable
+      - DATA_SOURCE_URI=postgres-primary:5432/${DB_NAME:-postgres}?sslmode=disable
+      - DATA_SOURCE_USER=${DB_USER:-postgres}
+      - DATA_SOURCE_PASS_FILE=/run/secrets/db_password
+    secrets:
+      - db_password
     ports:
       - "127.0.0.1:9187:9187"
     networks:
@@ -399,22 +542,31 @@ services:
   # ===========================================================================
   # GESTIÓN DE INCIDENCIAS — MantisBT + MariaDB (CARD-19 / MAN-01)
   # Perfil "mantis": docker compose --profile mantis up -d mantis
-  # Las contraseñas se definen en .env (sin valores por defecto en el repositorio).
+  # Las contraseñas son Docker Secrets (ver el bloque "secrets" al inicio): no hay valores en el repositorio.
   # ===========================================================================
 
   mantis-db:
     image: mariadb:10.11
     container_name: rayuela-mantis-db
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run/mysqld
+      - /tmp
     restart: unless-stopped
     profiles:
       - mantis
     environment:
       MARIADB_DATABASE: bugtracker
       MARIADB_USER: mantis
-      MARIADB_PASSWORD: ${MANTIS_DB_PASSWORD:-}
-      MARIADB_ROOT_PASSWORD: ${MANTIS_DB_ROOT_PASSWORD:-}
+      MARIADB_PASSWORD_FILE: /run/secrets/mantis_db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mantis_db_root_password
     volumes:
       - mantis_db_data:/var/lib/mysql
+    secrets:
+      - mantis_db_password
+      - mantis_db_root_password
     networks:
       - rayuela-network
     expose:
@@ -431,6 +583,8 @@ services:
   mantis:
     image: xlrl/mantisbt:2.28.4@sha256:a1253afdea1702dabbfef712a6f596247582d2fc61c249b118ea4a5a114fe226
     container_name: rayuela-mantis
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     profiles:
       - mantis
@@ -438,14 +592,17 @@ services:
       MANTIS_DB_HOST: mantis-db
       MANTIS_DB_NAME: bugtracker
       MANTIS_DB_USER: mantis
-      MANTIS_DB_PASSWORD: ${MANTIS_DB_PASSWORD:-}
-      MANTIS_CRYPTO_SALT: ${MANTIS_CRYPTO_SALT:-}
+      MANTIS_DB_PASSWORD_FILE: /run/secrets/mantis_db_password
+      MANTIS_CRYPTO_SALT_FILE: /run/secrets/mantis_crypto_salt
       MANTIS_BASE_URL: http://localhost:${MANTIS_PORT:-8081}/
       MANTIS_TIMEZONE: America/Argentina/Jujuy
       # 1 solo durante la instalacion del esquema (habilita /admin); luego 0.
       MANTIS_ENABLE_ADMIN: ${MANTIS_ENABLE_ADMIN:-0}
     volumes:
       - ./mantis/config_inc.php:/var/www/html/config/config_inc.php:ro
+    secrets:
+      - mantis_db_password
+      - mantis_crypto_salt
     networks:
       - rayuela-network
     # Solo accesible desde el propio equipo (igual que Grafana y pgAdmin).
@@ -468,14 +625,17 @@ services:
   backup:
     build: ./backup
     container_name: rayuela-backup
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     environment:
       DB_NAME: ${DB_NAME:-rayuela_db}
       DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD}
       TZ: America/Argentina/Jujuy
     volumes:
       - backups_data:/backups
+    secrets:
+      - db_password
     networks:
       - rayuela-network
     depends_on:

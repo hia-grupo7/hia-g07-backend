@@ -9,7 +9,7 @@
 #
 # Requisitos:
 #   - Docker Compose v2+
-#   - Ambas imágenes (rayuela-backend:1.0.0, rayuela-frontend:1.0.0) buildeadas
+#   - Ambas imágenes (rayuela-backend:1.1.0, rayuela-frontend:1.0.0) buildeadas
 #   - compose.yaml en el directorio actual
 # =============================================================================
 

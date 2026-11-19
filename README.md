@@ -124,6 +124,72 @@ Se definen en `.env` (ignorado por Git). La plantilla está en [`.env.example`](
 | `MERCADOPAGO_ACCESS_TOKEN`, `ACCESS_TOKEN` | Cobros con Mercado Pago |
 | `EMAIL_USER`, `EMAIL_PASS` | Cuenta SMTP para envío de correos |
 
+### Secretos (Docker Secrets)
+
+Con Docker Compose, las contraseñas y claves **no** se leen del `.env`: cada una es un archivo de la carpeta
+`secrets/` (ignorada por Git) que el contenedor recibe en `/run/secrets/<nombre>`. Así no quedan en el
+repositorio ni se ven con `docker inspect`. Sin esos archivos el stack no arranca.
+
+```bash
+node scripts/init-secrets.js     # el mismo comando en Windows, Linux y macOS (requiere Node 18+)
+```
+
+- **Instalación nueva:** el script genera contraseñas aleatorias.
+- **Ya tenés volúmenes creados** (la base se inició con las contraseñas anteriores): agregá `--valores-actuales`.
+  Sin ese flag el script se niega a continuar si detecta el volumen
+  `rayuela_postgres_data`, porque una contraseña nueva dejaría al backend sin acceso a la base.
+- El script **nunca pisa** un archivo existente y toma el valor del `.env` si la variable está definida.
+- Las claves de terceros (`gemini_api_key`, `mercadopago_access_token`, `email_pass`) quedan **vacías**: pedir el
+  valor real al responsable y pegarlo en el archivo. Mientras estén vacías, el chat con IA, los cobros con Mercado
+  Pago y el envío de correos quedan deshabilitados.
+- Cambiar un archivo de `secrets/` **no** cambia la contraseña que ya guardó Postgres, Grafana, pgAdmin o MariaDB
+  en su volumen; no borres volúmenes para probarlo. Tras recrear el backend, recargá el proxy:
+  `docker exec rayuela-nginx-proxy nginx -s reload`.
+
+| Archivo en `secrets/` | Lo usan |
+|---|---|
+| `db_password` | Postgres, PgBouncer, `postgres_exporter`, backend, backup |
+| `replicator_password` | réplica de Postgres |
+| `jwt_secret` | backend (firma de tokens) |
+| `pgadmin_password`, `grafana_admin_password` | pgAdmin, Grafana |
+| `mantis_db_password`, `mantis_db_root_password`, `mantis_crypto_salt` | MantisBT y su base MariaDB |
+| `gemini_api_key`, `mercadopago_access_token`, `email_pass` | backend (claves de terceros) |
+
+Sin Docker (`npm run dev`) el backend sigue leyendo esos valores de las variables de entorno del `.env`.
+
+### Rotación de secretos
+
+Cambiar solo el archivo de `secrets/` **no** alcanza: Postgres, Grafana y pgAdmin guardan su contraseña en su volumen
+(si solo cambiás el archivo, el backend, PgBouncer y Mantis dejan de conectar). El script `scripts/rotate-secrets.js`
+cambia la clave **dentro del servicio**, escribe el archivo nuevo, recrea los contenedores que la usan y verifica que la
+nueva funcione y la anterior ya no. Si algo falla, revierte. Es el mismo comando en Windows, Linux y macOS
+(requiere Node 18+ y Docker):
+
+```bash
+node scripts/rotate-secrets.js --simular --todos          # muestra los pasos sin cambiar nada
+node scripts/rotate-secrets.js db_password                # rota uno (pide escribir SI; --si lo omite)
+node scripts/rotate-secrets.js --todos --si               # db, réplica, JWT, Grafana y pgAdmin juntos
+echo "<clave real>" | node scripts/rotate-secrets.js --poner gemini_api_key --si   # clave de terceros
+```
+
+- Rota: `db_password`, `replicator_password`, `jwt_secret`, `grafana_admin_password` y `pgadmin_password`.
+  Las claves de terceros (`gemini_api_key`, `mercadopago_access_token`, `email_pass`) se reemplazan con `--poner`.
+- **No rota los secretos de Mantis**: `mantis_crypto_salt` debe ser el mismo en todo el grupo.
+- Rotar `jwt_secret` cierra todas las sesiones abiertas.
+- El valor anterior se guarda en `secrets/.anteriores/` para poder volver atrás (se pierde si se borra `secrets/`).
+- Tras rotar, los "valores anteriores" de `init-secrets --valores-actuales` ya no coinciden con tu base: volvé a hacer la copia cifrada.
+
+### Copia de seguridad cifrada de `secrets/`
+
+Las claves de Mantis y las de terceros no se pueden regenerar. Guardá una copia **fuera del repositorio**:
+
+```bash
+node scripts/backup-secrets.js respaldar ../respaldo-secretos.enc    # pide una contraseña
+node scripts/backup-secrets.js restaurar ../respaldo-secretos.enc    # sin --pisar no toca archivos existentes
+```
+
+El archivo `.enc` (AES-256-GCM, no es un .zip) se abre con el mismo script. El script se niega a guardarlo dentro del repo.
+
 ## Scripts
 
 | Comando | Acción |
