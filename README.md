@@ -248,6 +248,8 @@ Si n8n no está disponible el acceso igual queda auditado y la respuesta no camb
 
 ## Gestión de incidencias (MantisBT)
 
+Qué hacer ante un incidente de seguridad (clasificación, guías por escenario y cierre): [`docs/seguridad/protocolo-respuesta-incidentes.md`](docs/seguridad/protocolo-respuesta-incidentes.md).
+
 Mantis corre en el perfil `mantis` del compose, en `http://localhost:8081` (solo desde tu equipo). Sus secretos se crean
 con `node scripts/init-secrets.js` (ver arriba), **antes** del primer `up`.
 
