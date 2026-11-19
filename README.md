@@ -72,7 +72,8 @@ Tablas: `usuarios`, `roles`, `libros`, `inventory`, `ventas`, `venta_detalles`, 
 | `/api/ventas` | Ventas y pagos |
 | `/api/cupones` | Cupones de descuento |
 | `/api/dashboard` | Métricas para el panel administrativo |
-| `/api/admin/usuario` | Gestión de usuarios/empleados |
+| `/api/admin/usuario` | Gestión de usuarios/empleados (requiere token y rol admin) |
+| `/api/admin/reset-all` | Endpoint trampa (honeypot): no hace nada real, ver [Honeypot](#honeypot-endpoint-trampa) |
 | `/api/auditorias` | Registro de auditoría |
 | `/api/chat` | Asistente con IA (Gemini) |
 | `/api/docs` | Documentación Swagger |
@@ -156,6 +157,7 @@ node scripts/init-secrets.js     # el mismo comando en Windows, Linux y macOS (r
 | `pgadmin_password`, `grafana_admin_password` | pgAdmin, Grafana |
 | `mantis_db_password`, `mantis_db_root_password`, `mantis_crypto_salt` | MantisBT y su base MariaDB |
 | `gemini_api_key`, `mercadopago_access_token`, `email_pass` | backend (claves de terceros) |
+| `honeypot_webhook_token` | backend y n8n (token del webhook del honeypot; no entra en la rotación automática) |
 
 Sin Docker (`npm run dev`) el backend sigue leyendo esos valores de las variables de entorno del `.env`.
 
@@ -226,6 +228,23 @@ completa.
 **Túnel de Cloudflare.** `cloudflared` no tiene perfil: `docker compose --profile blue up -d` lo levanta y publica el proxy del
 stack, es decir, **todo** `/api/` (incluidos `/api/metrics` y `/api/docs`). Levantalo solo el tiempo necesario y revisá antes
 qué rutas quedan públicas.
+
+## Honeypot (endpoint trampa)
+
+`/api/admin/reset-all` (cualquier método) simula una ruta administrativa peligrosa pero **no ejecuta ninguna acción**: ningún
+usuario legítimo la usa, así que todo acceso es sospechoso. Por cada acceso el backend:
+
+1. Guarda una fila en `auditorias` (`accion = HONEYPOT`) con IP, cadena `X-Forwarded-For`, User-Agent, método, ruta, fecha y
+   cabeceras. De `Authorization` y `Cookie` solo se guarda que venían, no su valor.
+2. Suma `rayuela_honeypot_hits_total`.
+3. Avisa a n8n (`HONEYPOT_WEBHOOK_URL`, con la cabecera `X-Honeypot-Token`), que crea un incidente en MantisBT (categoría
+   *Seguridad & Accesos*, prioridad urgente, severidad mayor). Se avisa **una vez por IP cada 10 minutos**
+   (`HONEYPOT_VENTANA_MS`) para que un escáner no llene Mantis; el registro en `auditorias` es del 100% de los accesos.
+4. Responde `401 Acceso denegado. Token no proporcionado.`, igual que una ruta protegida.
+
+Si n8n no está disponible el acceso igual queda auditado y la respuesta no cambia. Para activar el aviso en una instalación nueva:
+`node scripts/init-secrets.js` (crea `secrets/honeypot_webhook_token` si falta), recrear el backend y ejecutar
+`python3 n8n/scripts/bootstrap_honeypot.py`. Probarlo: `curl -X POST http://localhost/api/admin/reset-all`.
 
 ## Gestión de incidencias (MantisBT)
 
