@@ -290,6 +290,13 @@ Cada etapa depende de la anterior: si fallan los tests o Trivy, no se versiona n
 
 **Versionado.** `fix` sube el parche, `feat` sube el minor y `BREAKING CHANGE` (o `!`) sube el major. En `dev` salen prereleases (`v1.1.0-dev.1`) y en `main` versiones estables (`v1.1.0`). Como `dev` y `main` se fusionan con squash o merge commit, **el título del Pull Request debe seguir Conventional Commits** (por ejemplo `feat(CARD-12): agregar filtro por categoría`). Un título sin tipo (`[CARD-12] ...`) no genera versión.
 
+**Escaneo de seguridad dinámico (OWASP ZAP).** Un workflow aparte, `.github/workflows/dast-zap.yml`, ataca el backend ya
+levantado dentro del runner (con una base PostgreSQL y claves efímeras que se descartan al terminar) usando `swagger_output.json`
+como mapa de endpoints, y publica el informe (HTML, JSON y Markdown) como artefacto `informe-zap`. **Es informativo: no está entre
+los checks obligatorios y no bloquea PRs.** Corre en PRs que cambian el código del backend en modo *seguro* (solo análisis pasivo)
+y, a mano desde la pestaña Actions, en modo *seguro* o *activo* (ataques reales: inyección SQL, XSS, etc.). Para el análisis se
+relajan los límites de login y chat; el escaneo no detecta rutas sin autenticación, eso se revisa aparte.
+
 **Secretos.** El pipeline usa solo el `GITHUB_TOKEN` automático. No hay credenciales en el repositorio.
 
 **Probar en tu máquina antes del PR:**
