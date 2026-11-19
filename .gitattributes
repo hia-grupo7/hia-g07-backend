@@ -1,0 +1,6 @@
+# Finales de línea: los archivos que se ejecutan o se copian dentro de contenedores
+# Linux deben quedar siempre con LF, aunque se clonen en Windows con core.autocrlf=true.
+# Con CRLF, "set -e" falla con "illegal option -" y cron ignora el crontab.
+*.sh          text eol=lf
+Dockerfile    text eol=lf
+backup/*      text eol=lf
