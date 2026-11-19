@@ -58,3 +58,7 @@ Thumbs.db
 # --- IDE ---
 .vscode/
 .idea/
+
+# --- Referencias locales (NO subir al repo) ---
+# Carpeta de guías/referencias externas usada solo localmente como consulta
+externos*/

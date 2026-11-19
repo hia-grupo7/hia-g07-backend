@@ -37,6 +37,8 @@ volumes:
     name: rayuela_mantis_db_data
   n8n_data:
     name: rayuela_n8n_data
+  backups_data:
+    name: rayuela_backups_data
 
 services:
 
@@ -67,6 +69,27 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # SERVICIO DE BACKUP AUTOMATIZADO — CARD-05
+  # ---------------------------------------------------------------------------
+  backup:
+    build: ./backup
+    container_name: rayuela-backup
+    restart: unless-stopped
+    environment:
+      DB_NAME: ${DB_NAME:-postgres}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-admin123}
+      TZ: America/Argentina/Jujuy
+    volumes:
+      - backups_data:/backups
+    networks:
+      - rayuela-network
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+
   # ---------------------------------------------------------------------------
   # NODO RÉPLICA (Hot Standby / Solo Lectura) — CARD-08
   # ---------------------------------------------------------------------------
@@ -417,11 +440,14 @@ services:
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-}
-      - NODE_FUNCTION_ALLOW_BUILTIN=fs
+      - TZ=America/Argentina/Jujuy
+      - GENERIC_TIMEZONE=America/Argentina/Jujuy
+      - NODE_FUNCTION_ALLOW_BUILTIN=fs,zlib
       - MANTIS_API_TOKEN=${MANTIS_API_TOKEN:-}
       - MANTIS_PROJECT_ID=${MANTIS_PROJECT_ID:-1}
     volumes:
       - n8n_data:/home/node/.n8n
+      - backups_data:/backups:ro
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     networks:

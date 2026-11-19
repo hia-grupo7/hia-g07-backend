@@ -173,10 +173,9 @@ una base de prueba** y validar antes de tocar la de producción:
 docker exec rayuela-backup restore.sh /backups/<archivo>.sql.gz rayuela_restore
 ```
 
-> Hoy el servicio `backup` está definido en `docker-compose.yml` (archivo anterior) y **no** en
-> `compose.yaml`, que es el stack vigente. Antes de depender de este nivel hay que confirmar con
-> el responsable de la tarjeta que el servicio corre en el entorno, y que el nombre del
-> script dentro del contenedor es el indicado.
+> El servicio `backup` está definido en `compose.yaml` (stack vigente) como `rayuela-backup`.
+> El script de restauración se copia a `/usr/local/bin/restore.sh` dentro del contenedor y
+> también está disponible como `restore.sh` por el `PATH`.
 
 Un rollback de datos pierde lo escrito después del backup: decidirlo con el grupo y registrar
 la pérdida en el incidente.
