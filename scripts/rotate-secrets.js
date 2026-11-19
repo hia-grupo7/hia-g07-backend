@@ -14,7 +14,7 @@
  *                                                                de la entrada estándar (o se escribe oculto)
  *   Opciones: --simular (muestra los pasos sin ejecutar)  --si (no pide confirmación)  --ayuda
  *
- * No rota los secretos de Mantis (mantis_*): el salt tiene que ser el mismo en todo el grupo.
+ * No rota los secretos de Mantis (mantis_*): todavía no está implementado ni probado.
  * Nunca imprime valores de secretos. El valor anterior se guarda en secrets/.anteriores/ para poder volver atrás.
  */
 'use strict';
@@ -88,6 +88,7 @@ async function esperarBackend(contenedor, segundos = 120) {
 
 // ---------------------------------------------------------------- Archivos de secretos
 const archivo = (nombre) => path.join(DIR, nombre);
+const esArchivo = (ruta) => { try { return fs.statSync(ruta).isFile(); } catch { return false; } };
 const leer = (nombre) => fs.readFileSync(archivo(nombre), 'utf8').trim();
 // Se escribe sobre el mismo archivo (no se reemplaza): el montaje de Docker sigue apuntando a él.
 const escribir = (nombre, valor) => fs.writeFileSync(archivo(nombre), valor, { mode: 0o644 });
@@ -321,7 +322,7 @@ async function ejecutar(nombres, { simular, si, valores }) {
   const defs = nombres.map((n) => ({ nombre: n, ...DEFS[n] }));
   const problemas = [];
   for (const d of defs) {
-    if (!fs.existsSync(archivo(d.nombre))) problemas.push(`Falta secrets/${d.nombre}: ejecutá primero scripts/init-secrets.`);
+    if (!esArchivo(archivo(d.nombre))) problemas.push(`Falta secrets/${d.nombre} (o es una carpeta que creó Docker): ejecutá primero scripts/init-secrets.js.`);
     for (const c of d.requiere) if (!corriendo(c)) problemas.push(`${d.nombre}: el contenedor ${c} no está en ejecución.`);
   }
   const consumidores = [...new Set(defs.flatMap((d) => d.consumidores))].filter((s) => corriendo(CONTENEDOR[s]));
@@ -396,7 +397,7 @@ async function main() {
   if (args.includes('--todos') && nombres.length) { log('--todos no se combina con nombres de secretos. No se cambió nada.'); return 1; }
   const pedidos = args.includes('--todos') ? NOMBRES_ROTABLES : nombres;
   const mantis = pedidos.filter((n) => n.startsWith('mantis_'));
-  if (mantis.length) { log(`Los secretos de Mantis no se rotan con este script (${mantis.join(', ')}): el salt debe ser el mismo en todo el grupo.`); return 1; }
+  if (mantis.length) { log(`Los secretos de Mantis no se rotan con este script (${mantis.join(', ')}): todavía no está implementado ni probado.`); return 1; }
   const desconocidos = pedidos.filter((n) => !DEFS[n]);
   if (desconocidos.length) { log(`Secreto desconocido: ${desconocidos.join(', ')}\nDisponibles: ${[...NOMBRES_ROTABLES, ...NOMBRES_TERCEROS].join(', ')}`); return 1; }
   const hayTerceros = pedidos.some((n) => DEFS[n].tercero);
