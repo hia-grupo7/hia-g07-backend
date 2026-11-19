@@ -16,6 +16,7 @@ Este módulo contiene los flujos de automatización de n8n para el proyecto **Ra
 | `00-error-handler.json` | N8N-00 Registro de Errores | Error interno | Workflow de error global que loguea fallos de cualquier otro workflow |
 | `01-alertas-infraestructura-mantisbt.json` | N8N-01 Fl.1 — Alertas de Infraestructura | Webhook (POST desde Grafana) | Recibe alertas de Grafana, crea ticket en MantisBT y notifica por email |
 | `02-verificacion-backups.json` | N8N-01 Fl.2 — Verificación de Backups | Schedule (04:00 AM diario) | Verifica integridad del backup más reciente de PostgreSQL y notifica por email si falla |
+| `03-honeypot-intrusion-mantisbt.json` | SEC-02 Honeypot — Intento de intrusión | Webhook (POST desde el backend, cabecera `X-Honeypot-Token`) | Recibe el aviso del endpoint trampa `/api/admin/reset-all` y crea un incidente de seguridad en MantisBT. Se carga con `python3 n8n/scripts/bootstrap_honeypot.py` |
 
 ---
 
