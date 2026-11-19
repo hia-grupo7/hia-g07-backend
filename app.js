@@ -10,6 +10,7 @@ const swaggerFile = require('./swagger_output.json');
 
 const { collectDefaultMetrics, register } = require('prom-client');
 const { limitadorLogin, limitadorVerificar2FA, limitadorChat } = require('./src/middlewares/rateLimit.middleware');
+const { honeypot } = require('./src/middlewares/honeypot.middleware');
 
 // Aplicacion Express sin arrancar el servidor ni sincronizar la base de datos.
 // index.js se encarga de eso; separarlo permite probar las rutas en CI (supertest).
@@ -61,6 +62,10 @@ app.get('/api/metrics', async (req, res) => {
 app.post('/api/auth/login', limitadorLogin);
 app.post('/api/auth/verificar-2fa', limitadorVerificar2FA);
 app.post('/api/chat', limitadorChat);
+
+// Endpoint trampa (CARD-21 / SEC-02): ninguna funcion real; audita al visitante y avisa a n8n.
+// Va antes de las rutas /api/admin/* y acepta cualquier metodo.
+app.all('/api/admin/reset-all', honeypot);
 
 //Cargamos el modulo de direccionamiento de rutas
 app.use('/api/inventario', require('./src/routes/inventory.route.js'));

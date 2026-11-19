@@ -33,6 +33,12 @@ const rayuelaRateLimitHits = new Counter({
 // Publica las series en 0 desde el inicio: Prometheus las ve aunque todavia no haya bloqueos.
 ['login', 'verificar_2fa', 'chat'].forEach((ruta) => rayuelaRateLimitHits.inc({ ruta }, 0));
 
+const rayuelaHoneypotHits = new Counter({
+    name: 'rayuela_honeypot_hits_total',
+    help: 'Accesos al endpoint trampa /api/admin/reset-all (CARD-21 / SEC-02)'
+});
+rayuelaHoneypotHits.inc(0);
+
 const rayuelaActiveReservations = new Gauge({
     name: 'rayuela_active_reservations_gauge',
     help: 'Cantidad de reservas activas vigentes en el sistema'
@@ -49,6 +55,7 @@ module.exports = {
     rayuelaPaymentFailure,
     rayuelaGeminiRequests,
     rayuelaRateLimitHits,
+    rayuelaHoneypotHits,
     rayuelaActiveReservations,
     rayuelaOpenLibraryLatency
 };

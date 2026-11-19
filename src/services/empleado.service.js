@@ -15,7 +15,7 @@ empleadoService.getEmpleados= async() =>{
             attributes: [],
             required: true
         }],
-        attributes: {exclude: ['usuarioId','createdAt','updatedAt','passwordHash']}
+        attributes: {exclude: ['usuarioId','createdAt','updatedAt','passwordHash','otpCode','otpExpiresAt','googleId']}
     }); 
 }
 

@@ -8,7 +8,8 @@ const auditoriaMiddelware = require('../middelwares/auditoria.middlware');
 const { verificarToken, permitirRoles } = require('../middlewares/auth.middleware');
 
 
-router.get('/', empleadoCtrl.getEmpleados);
+// SEC-02: el listado era publico y devolvia otpCode/otpExpiresAt; ahora exige token y rol admin.
+router.get('/', verificarToken, permitirRoles('admin'), empleadoCtrl.getEmpleados);
 
 router.post('/', verificarToken, auditoriaMiddelware('Usuarios'), empleadoCtrl.createEmpleado);
 

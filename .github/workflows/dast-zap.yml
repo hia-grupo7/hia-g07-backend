@@ -1,0 +1,172 @@
+name: DAST OWASP ZAP
+
+# Escaneo dinamico de seguridad (DAST) con OWASP ZAP (CARD-21 / SEC-02).
+# Levanta el backend contra una base PostgreSQL efimera dentro del runner y lo ataca
+# usando como mapa de endpoints el archivo swagger_output.json. Es INFORMATIVO: no bloquea
+# PRs (no esta entre los checks obligatorios) y nunca toca datos reales: la base, las claves
+# y el token de administrador se generan en cada ejecucion y se descartan con el runner.
+#   PR a dev/main (si cambia codigo del backend) -> modo "seguro": solo analisis pasivo, no ataca.
+#   Ejecucion manual                             -> elegis "seguro" o "activo" (ataques reales: inyeccion SQL,
+#                                                  XSS, etc.; tarda mas y escribe datos basura en la base efimera).
+# El informe (HTML, JSON y Markdown) se descarga como artefacto "informe-zap" de la ejecucion.
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - "app.js"
+      - "index.js"
+      - "config/**"
+      - "src/**"
+      - "swagger_output.json"
+      - "package.json"
+      - "package-lock.json"
+      - "Dockerfile"
+      - ".github/workflows/dast-zap.yml"
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "seguro = solo analisis pasivo; activo = incluye ataques activos"
+        type: choice
+        options: [seguro, activo]
+        default: seguro
+
+concurrency:
+  group: dast-zap-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # OWASP ZAP 2.17.0 (imagen estable), fijada por digest para que el escaneo sea reproducible.
+  ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:9624669db72f54d86c4b46a7064518bd9bf79d8c61a4c31befa9923489f328af
+
+jobs:
+  zap:
+    name: Escaneo DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # Claves de un solo uso: solo existen durante esta ejecucion.
+      - name: Generar credenciales efimeras
+        run: |
+          DB_PASSWORD="$(openssl rand -hex 16)"
+          JWT_SECRET="$(openssl rand -hex 32)"
+          echo "::add-mask::${DB_PASSWORD}"
+          echo "::add-mask::${JWT_SECRET}"
+          echo "DB_PASSWORD=${DB_PASSWORD}" >> "$GITHUB_ENV"
+          echo "JWT_SECRET=${JWT_SECRET}" >> "$GITHUB_ENV"
+
+      - name: Levantar PostgreSQL efimero
+        run: |
+          docker run -d --name zap-postgres -p 5432:5432 \
+            -e POSTGRES_PASSWORD="${DB_PASSWORD}" postgres:16-alpine
+          for _ in $(seq 1 30); do
+            docker exec zap-postgres pg_isready -U postgres && exit 0
+            sleep 2
+          done
+          echo "PostgreSQL no arranco" >&2
+          exit 1
+
+      # Los limitadores se relajan solo para el escaneo: con el limite de produccion (5 fallos/min)
+      # casi todos los intentos de login terminarian en 429 y el resto de la API quedaria sin probar.
+      - name: Levantar el backend
+        env:
+          PORT: "3000"
+          DB_HOST: 127.0.0.1
+          RATE_LIMIT_LOGIN_MAX: "100000"
+          RATE_LIMIT_CHAT_MAX: "100000"
+        run: |
+          nohup node index.js > backend.log 2>&1 &
+          for _ in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:3000/api/health > /dev/null; then
+              echo "Backend listo"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "El backend no arranco. Log:" >&2
+          cat backend.log >&2
+          exit 1
+
+      # El login real exige un codigo 2FA por correo. Para que ZAP llegue tambien a las rutas
+      # protegidas se firma un token de la cuenta de administrador sembrada (solo en la base efimera).
+      - name: Preparar el token de administrador efimero
+        run: |
+          ADMIN_ID="$(docker exec zap-postgres psql -U postgres -tAc \
+            "select id from usuarios where email = 'admin@sistema.com'")"
+          test -n "${ADMIN_ID}"
+          ADMIN_TOKEN="$(ADMIN_ID="${ADMIN_ID}" node -e \
+            "console.log(require('jsonwebtoken').sign({ id: Number(process.env.ADMIN_ID), rol: 'admin' }, process.env.JWT_SECRET, { expiresIn: '1h' }))")"
+          echo "::add-mask::${ADMIN_TOKEN}"
+          echo "ADMIN_TOKEN=${ADMIN_TOKEN}" >> "$GITHUB_ENV"
+
+      - name: Ejecutar OWASP ZAP
+        env:
+          MODO: ${{ github.event.inputs.modo || 'seguro' }}
+        run: |
+          mkdir -p zap-wrk
+          cp swagger_output.json zap-wrk/
+          chmod 777 zap-wrk
+          SEGURO=""
+          if [ "${MODO}" != "activo" ]; then SEGURO="-S"; fi
+          echo "Modo de escaneo: ${MODO}"
+          # -I: un hallazgo no hace fallar el job (es informativo). El token viaja en una regla que
+          # agrega la cabecera Authorization a cada pedido de ZAP.
+          docker run --rm --network host -v "${PWD}/zap-wrk:/zap/wrk:rw" "${ZAP_IMAGE}" \
+            zap-api-scan.py \
+              -t /zap/wrk/swagger_output.json -f openapi -O http://127.0.0.1:3000 \
+              -r informe-zap.html -J informe-zap.json -w informe-zap.md \
+              -I ${SEGURO} \
+              -z "-config replacer.full_list(0).description=auth \
+                  -config replacer.full_list(0).enabled=true \
+                  -config replacer.full_list(0).matchtype=REQ_HEADER \
+                  -config replacer.full_list(0).matchstr=Authorization \
+                  -config replacer.full_list(0).regex=false \
+                  -config replacer.full_list(0).replacement=Bearer\ ${ADMIN_TOKEN}"
+
+      - name: Resumen de hallazgos
+        if: always()
+        env:
+          MODO: ${{ github.event.inputs.modo || 'seguro' }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          ruta = "zap-wrk/informe-zap.json"
+          print(f"## Resultado del escaneo OWASP ZAP (modo: {os.environ.get('MODO', 'seguro')})")
+          if not os.path.exists(ruta):
+              print("\nNo se genero el informe: revisar el paso 'Ejecutar OWASP ZAP'.")
+              raise SystemExit
+          datos = json.load(open(ruta, encoding="utf-8"))
+          conteo = {}
+          for sitio in datos.get("site", []):
+              for alerta in sitio.get("alerts", []):
+                  nivel = alerta.get("riskdesc", "").split(" ")[0] or "Sin clasificar"
+                  conteo.setdefault(nivel, []).append(alerta.get("name", "?"))
+          print("\n| Riesgo | Alertas | Detalle |\n|---|---|---|")
+          for nivel in ("High", "Medium", "Low", "Informational"):
+              nombres = sorted(set(conteo.get(nivel, [])))
+              print(f"| {nivel} | {len(conteo.get(nivel, []))} | {'; '.join(nombres) or '-'} |")
+          print("\nEl informe completo (HTML, JSON y Markdown) esta en el artefacto **informe-zap**.")
+          PY
+
+      - name: Subir el informe como artefacto
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: informe-zap
+          path: zap-wrk/informe-zap.*
+          if-no-files-found: warn
+          retention-days: 30

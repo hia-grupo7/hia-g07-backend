@@ -1,0 +1,166 @@
+{
+  "name": "SEC-02 Honeypot - Intento de intrusion (Backend -> MantisBT)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "honeypot-alerta",
+        "options": {},
+        "responseMode": "onReceived",
+        "authentication": "headerAuth"
+      },
+      "id": "sec02-honeypot-webhook-001",
+      "name": "Webhook Honeypot",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "honeypot-alerta-7c1e4b9a2d65"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const raw = items[0].json || {};\nconst p = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst limpio = (v, max) => String(v === undefined || v === null || v === '' ? 'desconocido' : v).slice(0, max || 300);\n\nconst cabeceras = p.cabeceras && typeof p.cabeceras === 'object'\n  ? Object.entries(p.cabeceras).map(([k, v]) => '  ' + limpio(k, 60) + ': ' + limpio(v, 200)).join('\\n')\n  : '  (sin cabeceras)';\n\nconst description = [\n  'Acceso al endpoint trampa (honeypot) /api/admin/reset-all.',\n  'Esa ruta no hace nada real: nadie legitimo la usa, asi que se trata de un intento activo de intrusion.',\n  '',\n  'IP de origen: ' + limpio(p.ip),\n  'Cadena X-Forwarded-For: ' + limpio(p.cadenaXForwardedFor),\n  'User-Agent: ' + limpio(p.userAgent),\n  'Metodo: ' + limpio(p.metodo),\n  'Ruta solicitada: ' + limpio(p.ruta),\n  'Fecha (UTC): ' + limpio(p.fecha),\n  'Registro en tabla auditorias (id): ' + limpio(p.auditoriaId),\n  '',\n  'Cabeceras recibidas (Authorization y Cookie sin valor):',\n  cabeceras,\n  '',\n  'Accion sugerida: ver el protocolo de respuesta a incidentes (bloquear la IP, revisar auditorias y rotar secretos si hay indicios de acceso previo).'\n].join('\\n');\n\nreturn [{\n  json: {\n    ip: limpio(p.ip),\n    auditoriaId: p.auditoriaId === undefined ? null : p.auditoriaId,\n    summary: '[HONEYPOT] Intento de acceso a /api/admin/reset-all desde ' + limpio(p.ip, 60),\n    description,\n    priorityId: 50,\n    severityId: 60\n  }\n}];\n"
+      },
+      "id": "sec02-honeypot-armar-001",
+      "name": "Armar Incidente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://mantis/api/rest/issues",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ summary: $json.summary, description: $json.description, project: { id: 1 }, category: { name: 'Seguridad & Accesos' }, priority: { id: $json.priorityId }, severity: { id: $json.severityId } }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "sec02-honeypot-mantis-001",
+      "name": "Crear Ticket MantisBT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        608,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const issue = (items[0].json && items[0].json.issue) || {};\nconst origen = $('Armar Incidente').first().json || {};\nconsole.log(JSON.stringify({\n  ts: new Date().toISOString(),\n  source: 'n8n-honeypot',\n  workflow: $workflow.name,\n  executionId: $execution.id,\n  ticketMantis: issue.id || null,\n  ip: origen.ip || null,\n  auditoriaId: origen.auditoriaId\n}));\nreturn items;\n"
+      },
+      "id": "sec02-honeypot-registrar-001",
+      "name": "Registrar Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const entries = Array.isArray(items) ? items : [items];\nfor (const item of entries) {\n  const data = item.json || {};\n  const err = data.error || data;\n  const nodeName = (data.node && data.node.name) || data.nodeName || data.node || 'desconocido';\n  console.error(JSON.stringify({\n    ts: new Date().toISOString(),\n    source: 'n8n-honeypot-error-node',\n    workflow: $workflow.name,\n    executionId: $execution.id,\n    node: typeof nodeName === 'string' ? nodeName : JSON.stringify(nodeName),\n    message: err.message || String(err),\n    description: err.description || null\n  }, null, 2));\n}\nreturn [];\n"
+      },
+      "id": "sec02-honeypot-error-001",
+      "name": "Registrar Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Honeypot": {
+      "main": [
+        [
+          {
+            "node": "Armar Incidente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Incidente": {
+      "main": [
+        [
+          {
+            "node": "Crear Ticket MantisBT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear Ticket MantisBT": {
+      "main": [
+        [
+          {
+            "node": "Registrar Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Ticket": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Error": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  }
+}
