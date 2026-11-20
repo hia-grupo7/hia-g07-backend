@@ -1,25 +1,36 @@
 const { DataTypes } = require('sequelize');
 const sequelize = require('../../config/database');
 const Book = require('./book.model');
-// Asumiendo que tus compañeros crearán un usuario.model.js, si no, luego agregamos la relación
-// const Usuario = require('./usuario.model'); 
+const Usuario = require('./usuario.model');
 
 const Reserva = sequelize.define('Reserva', {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    idUsuario: { type: DataTypes.INTEGER, allowNull: false },
+    idUsuario: { 
+        type: DataTypes.INTEGER, 
+        allowNull: false,
+        references: {
+            model: 'usuarios',
+            key: 'id'
+        },
+        onDelete: 'CASCADE'
+    },
     fechaReserva: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
     fechaVencimiento: { type: DataTypes.DATE, allowNull: false },
     estado: { 
         type: DataTypes.STRING, 
-        defaultValue: 'activa' // Puede ser: 'activa', 'completada', 'vencida', 'cancelada'
+        defaultValue: 'activa' // 'activa', 'completada', 'vencida', 'cancelada'
     }
 }, {
     tableName: 'reservas',
     timestamps: true
 });
 
-// Relación con el Libro (Una reserva pertenece a un libro)
+// Relación con Libro
 Reserva.belongsTo(Book, { foreignKey: 'idLibro', as: 'book' });
 Book.hasMany(Reserva, { foreignKey: 'idLibro', as: 'reservas' });
+
+// Relación con Usuario (Foreign Key)
+Reserva.belongsTo(Usuario, { foreignKey: 'idUsuario', as: 'usuario' });
+Usuario.hasMany(Reserva, { foreignKey: 'idUsuario', as: 'reservas' });
 
 module.exports = Reserva;

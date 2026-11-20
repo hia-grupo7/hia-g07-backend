@@ -1,42 +1,11 @@
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
 const sequelize = require('./config/database');
 const seedRoles = require('./config/initRoles.js');
 
-const dotenv = require('dotenv');
 const Rol = require('./src/models/rol.model');
 
-dotenv.config();
-
-//librerias de swagger y archivo JSON que autogenera
-const swaggerUi = require('swagger-ui-express');
-const swaggerFile = require('./swagger_output.json');
-
-var app = express();
-//middlewares
-app.use(express.json());
-app.use(cors({origin: 'http://localhost:4200'}));
-
-// Servir imagenes de portadas
-app.use('/covers', express.static(path.join(__dirname, 'public', 'covers')));
-
-// entrar a http://localhost:3000/api/docs para ver toda la interfaz visual
-app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerFile));
-
-//Cargamos el modulo de direccionamiento de rutas
-app.use('/api/inventario', require('./src/routes/inventory.route.js'));
-app.use('/api/libros', require('./src/routes/book.route.js'));
-app.use('/api/cupones', require('./src/routes/cupon.route.js'));
-app.use('/api/auth', require('./src/routes/auth.route'));
-app.use('/api/reservas', require('./src/routes/reserva.route.js'));
-app.use('/api/ventas', require('./src/routes/venta.route.js'));
-app.use('/api/dashboard', require('./src/routes/dashboard.routes.js'));
-//app.use('/api/agente', require('./src/routes/agente.route.js'));
-app.use('/api/admin/usuario', require('./src/routes/empleado.route'));
-app.use('/api/auditorias', require('./src/routes/auditoria.route'));
-app.use('/api/chat', require('./src/routes/chat.route.js'));
+// La aplicacion Express (middlewares y rutas) vive en app.js para poder probarla sin BD.
+const app = require('./app');
 
 const asegurarRolesBase = async () => {
     const rolesBase = [
@@ -53,15 +22,34 @@ const asegurarRolesBase = async () => {
 //setting
 app.set('port', process.env.PORT || 3000);
 // Sincronizar Base de Datos y arrancar el servidor
-// alter: true permite agregar columnas nuevas en tablas existentes sin borrar datos.
-sequelize.sync({ force: false, alter: true })
-.then(async () => {
-    await seedRoles();
+// sync() crea las tablas que falten. "alter: true" queda como opción (DB_SYNC_ALTER=true) y no por defecto:
+// en PostgreSQL, cada arranque con alter agrega otra restricción UNIQUE duplicada (usuarios_email_keyN,
+// cupones_codigo_keyN, roles_nombre_keyN), que se acumulan sin límite y ralentizan las escrituras.
+// Para cambios de esquema usar database/schema.sql o activar DB_SYNC_ALTER una sola vez.
+const sincronizarConAlter = process.env.DB_SYNC_ALTER === 'true';
+
+// Al arrancar puede no haber lider todavia (arranque en frio o failover en curso): se reintenta unos segundos.
+// Si no se consigue, el proceso termina con error y Docker lo reinicia (antes quedaba vivo sin escuchar).
+const iniciar = async () => {
+    const maximo = 30;
+    for (let intento = 1; ; intento++) {
+        try {
+            await sequelize.sync({ force: false, alter: sincronizarConAlter });
+            await seedRoles();
+            break;
+        } catch (err) {
+            if (intento >= maximo) throw err;
+            console.error(`BD no disponible (intento ${intento}/${maximo}): ${err.message}. Reintentando en 3 s...`);
+            await new Promise((r) => setTimeout(r, 3000));
+        }
+    }
     console.log('Tablas de PostgreSQL sincronizadas');
     app.listen(app.get('port'), () => {
-    console.log(`Server started on port`, app.get('port'));
-});
-})
-.catch(err => {
+        console.log(`Server started on port`, app.get('port'));
+    });
+};
+
+iniciar().catch((err) => {
     console.error('No se pudo iniciar el servidor debido a un error en la BD:', err);
+    process.exit(1);
 });

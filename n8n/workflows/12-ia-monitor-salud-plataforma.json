@@ -1,0 +1,157 @@
+{
+  "name": "IA-03 Monitor de salud de la plataforma",
+  "nodes": [
+    {
+      "id": "ia03-trigger",
+      "name": "Cada 60 segundos",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 60
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ia03-revisar",
+      "name": "Revisar plataforma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\n// Revisa la plataforma y devuelve UN evento cuando algo cambia (falla nueva, falla que persiste o recuperacion).\n// Si todo sigue igual no devuelve nada y el flujo termina ahi.\nconst DESTINATARIO = 'CAMBIAR_DESTINATARIO@ejemplo.com';   // editar aqui (o lo carga bootstrap_ia.py)\nconst REMITENTE = 'CAMBIAR_REMITENTE@ejemplo.com';\nconst REAVISO_MS = 15 * 60 * 1000;     // si una falla persiste, se vuelve a avisar cada 15 minutos\nconst estado = $getWorkflowStaticData('global');\n\nconst http = async (url, json = true) => {\n  const t0 = Date.now();\n  try {\n    const r = await this.helpers.httpRequest({ url, method: 'GET', timeout: 5000, json, returnFullResponse: true, ignoreHttpStatusErrors: true });\n    return { ok: r.statusCode >= 200 && r.statusCode < 300, codigo: r.statusCode, cuerpo: r.body, ms: Date.now() - t0 };\n  } catch (e) {\n    return { ok: false, codigo: 0, error: String(e.message || e).slice(0, 200), ms: Date.now() - t0 };\n  }\n};\n\nconst [p1, p2, e1, e2, e3, hap, api] = await Promise.all([\n  http('http://patroni1:8008/cluster'), http('http://patroni2:8008/cluster'),\n  http('http://etcd1:2379/health'), http('http://etcd2:2379/health'), http('http://etcd3:2379/health'),\n  http('http://haproxy:7000/;csv', false),\n  http('http://nginx-proxy/api/health'),\n]);\n\n// --- base de datos\nconst miembros = ((p1.ok && p1.cuerpo && p1.cuerpo.members) || (p2.ok && p2.cuerpo && p2.cuerpo.members) || []).map((m) => ({\n  nombre: m.name, rol: m.role, estado: m.state, lineaTiempo: m.timeline, retrasoMB: m.lag,\n}));\nconst lider = (miembros.find((m) => m.rol === 'leader') || {}).nombre || null;\nconst hayStandby = miembros.some((m) => /standby|replica/.test(m.rol || '') && /streaming|running/.test(m.estado || ''));\nconst nodosResponden = { patroni1: p1.ok, patroni2: p2.ok };\nconst etcdVivos = [e1, e2, e3].filter((x) => x.ok).length;\n\n// --- HAProxy: ¿hay un servidor UP en el bloque \"primary\"?\nlet haproxyPrimario = null;\nif (hap.ok && typeof hap.cuerpo === 'string') {\n  const filas = hap.cuerpo.split('\\n').filter((l) => /^primary,patroni\\d,/.test(l));\n  haproxyPrimario = filas.some((l) => l.split(',')[17] === 'UP');\n}\n\n// --- problemas activos\nconst problemas = [];   // { codigo, severidad, detalle }\nfor (const [nodo, vivo] of Object.entries(nodosResponden)) {\n  if (!vivo) problemas.push({ codigo: 'NODO_DB_CAIDO', severidad: 'critica', detalle: `El nodo ${nodo} de la base de datos no responde (API de Patroni).` });\n}\nconst nodosVivos = Object.values(nodosResponden).filter(Boolean).length;\nif (nodosVivos === 0) problemas.push({ codigo: 'SIN_LIDER', severidad: 'critica', detalle: 'Ninguno de los dos nodos de base de datos responde.' });\nelse if (!lider) problemas.push({ codigo: 'SIN_LIDER', severidad: 'critica', detalle: 'El clúster de base de datos no tiene líder: las escrituras están detenidas.' });\nif (nodosVivos === 1 && lider) problemas.push({ codigo: 'SIN_REPLICA', severidad: 'alta', detalle: 'Queda un solo nodo de base de datos: no hay réplica ni redundancia.' });\nelse if (nodosVivos === 2 && lider && !hayStandby) problemas.push({ codigo: 'SIN_REPLICA', severidad: 'media', detalle: 'La réplica no está en streaming todavía (se está sincronizando).' });\nif (etcdVivos === 2) problemas.push({ codigo: 'ETCD_DEGRADADO', severidad: 'media', detalle: 'Falta uno de los tres etcd. El clúster sigue funcionando, pero sin margen de falla.' });\nif (etcdVivos < 2) problemas.push({ codigo: 'ETCD_SIN_QUORUM', severidad: 'critica', detalle: `Solo ${etcdVivos} de 3 etcd responden: Patroni no puede elegir líder.` });\nif (!hap.ok) problemas.push({ codigo: 'HAPROXY_CAIDO', severidad: 'critica', detalle: 'HAProxy no responde: la aplicación no puede llegar a la base.' });\nelse if (haproxyPrimario === false) problemas.push({ codigo: 'HAPROXY_SIN_PRIMARIO', severidad: 'critica', detalle: 'HAProxy no ve ningún nodo líder al que escribir.' });\n\n// --- aplicacion\nconst apiCuerpo = (api.cuerpo && typeof api.cuerpo === 'object') ? api.cuerpo : {};\nif (api.codigo === 503 || (api.ok && apiCuerpo.baseDeDatos && apiCuerpo.baseDeDatos !== 'conectada')) {\n  problemas.push({ codigo: 'BACKEND_SIN_BASE_DE_DATOS', severidad: 'critica', detalle: `El backend responde pero no tiene base de datos${apiCuerpo.error ? ': ' + String(apiCuerpo.error).slice(0, 120) : '.'}` });\n} else if (!api.ok) {\n  problemas.push({ codigo: 'BACKEND_CAIDO', severidad: 'critica', detalle: `/api/health no responde correctamente (HTTP ${api.codigo || 'sin respuesta'}${api.error ? ', ' + api.error : ''}).` });\n}\n\n// --- cambio de lider (informativo)\nconst liderPrevio = estado.lider || null;\nconst cambioLider = !!(liderPrevio && lider && liderPrevio !== lider);\nif (cambioLider) problemas.push({ codigo: 'LIDER_CAMBIO', severidad: 'alta', detalle: `El líder de la base de datos cambió de ${liderPrevio} a ${lider}.`, unico: true });\nif (lider) estado.lider = lider;\n\n// --- decidir si hay que avisar\nconst persistentes = problemas.filter((p) => !p.unico);\nconst firma = persistentes.map((p) => p.codigo + (p.codigo === 'NODO_DB_CAIDO' ? ':' + p.detalle : '')).sort().join('|');\nconst firmaPrevia = estado.firma || '';\nconst ahora = Date.now();\nlet tipo = null;\nif (problemas.length && (firma !== firmaPrevia || cambioLider || ahora - (estado.ultimoAviso || 0) > REAVISO_MS)) tipo = 'falla';\nelse if (!problemas.length && firmaPrevia) tipo = 'recuperacion';\nestado.firma = firma;\nif (!tipo) return [];\nestado.ultimoAviso = ahora;\n\nconst orden = { critica: 3, alta: 2, media: 1, baja: 0 };\nconst peor = problemas.slice().sort((a, b) => orden[b.severidad] - orden[a.severidad])[0];\nconst snapshot = {\n  lider, miembros, etcdVivos: `${etcdVivos}/3`, haproxyPrimario: haproxyPrimario === null ? 'sin datos' : (haproxyPrimario ? 'UP' : 'DOWN'),\n  api: { codigo: api.codigo, baseDeDatos: apiCuerpo.baseDeDatos || null, latenciaMs: api.ms },\n};\nconst logs = [p1, p2, hap, api].filter((x) => x.error).map((x) => x.error);\nif (apiCuerpo.error) logs.push(String(apiCuerpo.error).slice(0, 200));\n\nconst servicio = problemas.some((p) => /DB|LIDER|REPLICA|ETCD|HAPROXY/.test(p.codigo)) ? 'base-de-datos' : 'backend';\nreturn [{ json: {\n  origen: 'monitor-n8n', servicio, tipo,\n  severidad: tipo === 'recuperacion' ? 'baja' : (peor ? peor.severidad : 'media'),\n  evento: tipo === 'recuperacion' ? 'PLATAFORMA_RECUPERADA' : peor.codigo,\n  eventos: problemas.map((p) => p.codigo),\n  descripcion: tipo === 'recuperacion' ? 'Todos los componentes revisados volvieron a la normalidad.' : problemas.map((p) => p.detalle).join(' '),\n  estado: snapshot, logs, hora: new Date().toISOString(),\n  destinatario: DESTINATARIO, remitente: REMITENTE,\n} }];\n"
+      }
+    },
+    {
+      "id": "ia03-enviar",
+      "name": "Enviar al diagnóstico con IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "http://n8n:5678/webhook/diagnostico-falla",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 40000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Diagnostico Webhook Token"
+        }
+      }
+    },
+    {
+      "id": "ia03-directo",
+      "name": "Armar aviso directo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        140
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\nconst AYUDA = {\n  NODO_DB_CAIDO: { seccion: '01 · DB-01 / DB-02', pasos: ['docker ps -a --filter name=rayuela-patroni', 'docker logs --tail 50 rayuela-patroni1', 'docker start rayuela-patroni1   # el nodo caido', 'docker exec rayuela-patroni2 patronictl list'] },\n  LIDER_CAMBIO: { seccion: '01 · DB-03', pasos: ['docker exec rayuela-patroni1 patronictl history', 'docker exec rayuela-patroni1 patronictl list'] },\n  SIN_LIDER: { seccion: '01 · DB-04', pasos: ['docker exec rayuela-etcd1 etcdctl endpoint health --cluster', 'docker ps -a --filter name=rayuela-patroni --filter name=rayuela-etcd', 'docker logs --tail 80 rayuela-patroni1', 'docker logs --tail 80 rayuela-patroni2'] },\n  SIN_REPLICA: { seccion: '01 · DB-02', pasos: ['docker start rayuela-patroni2   # el nodo caido', 'docker exec rayuela-patroni1 patronictl list'] },\n  ETCD_DEGRADADO: { seccion: '01 · DB-05', pasos: ['docker exec rayuela-etcd1 etcdctl endpoint health --cluster', 'docker start rayuela-etcd2   # el etcd caido'] },\n  ETCD_SIN_QUORUM: { seccion: '01 · DB-05', pasos: ['docker ps -a --filter name=rayuela-etcd', 'docker start rayuela-etcd1 rayuela-etcd2 rayuela-etcd3'] },\n  HAPROXY_SIN_PRIMARIO: { seccion: '01 · DB-04', pasos: ['curl -s http://127.0.0.1:7000/', 'docker exec rayuela-patroni1 patronictl list'] },\n  HAPROXY_CAIDO: { seccion: '00 · mapa de la plataforma', pasos: ['docker ps -a --filter name=rayuela-haproxy', 'docker logs --tail 40 rayuela-haproxy', 'docker compose --profile blue up -d haproxy'] },\n  BACKEND_CAIDO: { seccion: '02 · APP-01 / APP-03', pasos: ['docker ps -a --filter name=rayuela-backend', 'docker logs --tail 100 rayuela-backend-blue', 'docker exec rayuela-nginx-proxy nginx -s reload'] },\n  BACKEND_SIN_BASE_DE_DATOS: { seccion: '02 · APP-02', pasos: ['curl -s http://localhost/api/health', 'docker exec rayuela-patroni1 patronictl list'] },\n};\n\n// Se usa SOLO si el flujo de diagnostico no se pudo invocar (por ejemplo, esta inactivo): el aviso no se pierde.\nconst p = $('Revisar plataforma').first().json;\nconst esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst ayuda = AYUDA[p.evento] || {};\nconst html = `<div style=\"font-family:Arial,sans-serif;max-width:680px\">\n<h2>[Rayuela] ${esc(p.tipo === 'recuperacion' ? 'RECUPERADO' : String(p.severidad).toUpperCase())} · ${esc(p.evento)}</h2>\n<p>${esc(p.descripcion)}</p>\n<p><strong>Hora:</strong> ${esc(p.hora)}</p>\n<p><strong>Estado:</strong></p><pre style=\"background:#f4f4f5;padding:10px;white-space:pre-wrap\">${esc(JSON.stringify(p.estado, null, 2))}</pre>\n${ayuda.pasos ? `<p><strong>Primeros pasos (manual operativo, sección ${esc(ayuda.seccion)}):</strong></p><pre style=\"background:#f4f4f5;padding:10px;white-space:pre-wrap\">${esc(ayuda.pasos.join('\\n'))}</pre>` : ''}\n<p style=\"color:#64748b;font-size:12px\">Aviso directo del monitor: el flujo de diagnóstico con IA no estuvo disponible.</p></div>`;\nreturn [{ json: { subject: `[Rayuela] ${p.tipo === 'recuperacion' ? 'RECUPERADO' : p.severidad.toUpperCase()} · ${p.evento} · ${p.servicio}`, html, destinatario: p.destinatario, remitente: p.remitente } }];\n"
+      }
+    },
+    {
+      "id": "ia03-correo",
+      "name": "Enviar aviso directo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1040,
+        140
+      ],
+      "parameters": {
+        "fromEmail": "={{ $json.remitente }}",
+        "toEmail": "={{ $json.destinatario }}",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "SMTP Gmail Rayuela"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Revisar plataforma": {
+      "main": [
+        [
+          {
+            "node": "Enviar al diagnóstico con IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar al diagnóstico con IA": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Armar aviso directo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar aviso directo": {
+      "main": [
+        [
+          {
+            "node": "Enviar aviso directo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cada 60 segundos": {
+      "main": [
+        [
+          {
+            "node": "Revisar plataforma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

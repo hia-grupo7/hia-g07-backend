@@ -1,0 +1,179 @@
+{
+  "updatedAt": "2026-11-19T00:31:15.466Z",
+  "createdAt": "2026-11-19T00:31:15.466Z",
+  "id": "ncCuil3GfmQzaetM",
+  "name": "N8N-00 - Registro de Errores",
+  "description": null,
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n8n-error-trigger-001",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const e = items[0]?.json || {};\nconst err = e.error || {};\nconst wf = e.workflow || {};\nconst exec = e.execution || {};\nconsole.error(JSON.stringify({\n  ts: new Date().toISOString(),\n  source: 'n8n-error-workflow',\n  workflow: wf.name || wf.id || 'desconocido',\n  workflowId: wf.id || null,\n  executionId: exec.id || null,\n  lastNodeExecuted: e.lastNodeExecuted || null,\n  node: (err.node && err.node.name) || err.nodeName || null,\n  message: err.message || String(err),\n  description: err.description || null,\n  stack: err.stack || null,\n}, null, 2));\nreturn [];\n"
+      },
+      "id": "n8n-error-log-001",
+      "name": "Registrar Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Error": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": null,
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "5725919a-720f-4611-9e7c-4603c89e6998",
+  "activeVersionId": "5725919a-720f-4611-9e7c-4603c89e6998",
+  "versionCounter": 1,
+  "triggerCount": 0,
+  "sourceWorkflowId": null,
+  "shared": [
+    {
+      "updatedAt": "2026-11-19T00:31:15.477Z",
+      "createdAt": "2026-11-19T00:31:15.477Z",
+      "role": "workflow:owner",
+      "workflowId": "ncCuil3GfmQzaetM",
+      "projectId": "VTQWJaPVK2Yfuq3J",
+      "project": {
+        "updatedAt": "2026-11-18T20:41:34.603Z",
+        "createdAt": "2026-11-18T06:51:59.315Z",
+        "id": "VTQWJaPVK2Yfuq3J",
+        "name": "N8N n8n <n8n@gmail.com>",
+        "type": "personal",
+        "icon": null,
+        "description": null,
+        "customTelemetryTags": [],
+        "creatorId": "a41d6fd6-f988-49b8-8646-b047c8d8d3eb"
+      }
+    }
+  ],
+  "tags": [],
+  "parentFolder": null,
+  "activeVersion": {
+    "updatedAt": "2026-11-19T00:31:15.486Z",
+    "createdAt": "2026-11-19T00:31:15.486Z",
+    "versionId": "5725919a-720f-4611-9e7c-4603c89e6998",
+    "workflowId": "ncCuil3GfmQzaetM",
+    "nodes": [
+      {
+        "parameters": {},
+        "id": "n8n-error-trigger-001",
+        "name": "Error Trigger",
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "mode": "runOnceForAllItems",
+          "language": "javaScript",
+          "jsCode": "const e = items[0]?.json || {};\nconst err = e.error || {};\nconst wf = e.workflow || {};\nconst exec = e.execution || {};\nconsole.error(JSON.stringify({\n  ts: new Date().toISOString(),\n  source: 'n8n-error-workflow',\n  workflow: wf.name || wf.id || 'desconocido',\n  workflowId: wf.id || null,\n  executionId: exec.id || null,\n  lastNodeExecuted: e.lastNodeExecuted || null,\n  node: (err.node && err.node.name) || err.nodeName || null,\n  message: err.message || String(err),\n  description: err.description || null,\n  stack: err.stack || null,\n}, null, 2));\nreturn [];\n"
+        },
+        "id": "n8n-error-log-001",
+        "name": "Registrar Error",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          304,
+          0
+        ]
+      }
+    ],
+    "connections": {
+      "Error Trigger": {
+        "main": [
+          [
+            {
+              "node": "Registrar Error",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Registrar Error": {
+        "main": [
+          []
+        ]
+      }
+    },
+    "nodeGroups": [],
+    "authors": "N8N n8n",
+    "name": null,
+    "description": null,
+    "autosaved": false,
+    "workflowPublishHistory": [
+      {
+        "createdAt": "2026-11-19T00:32:53.635Z",
+        "id": 12,
+        "workflowId": "ncCuil3GfmQzaetM",
+        "versionId": "5725919a-720f-4611-9e7c-4603c89e6998",
+        "event": "activated",
+        "userId": "a41d6fd6-f988-49b8-8646-b047c8d8d3eb"
+      }
+    ]
+  },
+  "scopes": [
+    "execution:delete",
+    "execution:list",
+    "execution:read",
+    "execution:reveal",
+    "workflow:create",
+    "workflow:delete",
+    "workflow:disableRedaction",
+    "workflow:enableRedaction",
+    "workflow:execute",
+    "workflow:execute-chat",
+    "workflow:export",
+    "workflow:import",
+    "workflow:list",
+    "workflow:move",
+    "workflow:publish",
+    "workflow:read",
+    "workflow:share",
+    "workflow:unpublish",
+    "workflow:unshare",
+    "workflow:update"
+  ],
+  "checksum": "6e528afe1790d1c235b09bc62fc883a6c5a5a8342a71b918da7ead56b5208f38"
+}

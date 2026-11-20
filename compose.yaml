@@ -1,0 +1,898 @@
+# =============================================================================
+# compose.yaml — Stack Completo Rayuela con Blue/Green Deployment y Cloudflare Tunnel
+# CARD-10: Orquestación Docker Compose y Blue/Green Deployment
+# CARD-15: Publicación Segura en Internet con Cloudflare Tunnel y HTTPS
+#
+# Uso básico:
+#   docker compose --profile blue up -d          # Levantar slot Blue + Tunnel
+#   docker compose --profile green up -d         # Levantar slot Green + Tunnel
+#   docker compose up -d                         # Levantar infra base + proxy + tunnel
+#
+# Conmutación sin corte:
+#   bash scripts/switch-bluegreen.sh green       # Cambiar de Blue a Green
+#   bash scripts/switch-bluegreen.sh blue        # Cambiar de Green a Blue
+#
+# Ver URL pública de Cloudflare:
+#   powershell -File scripts/get-tunnel-url.ps1  # Windows
+#   bash scripts/get-tunnel-url.sh               # Linux / macOS
+# =============================================================================
+
+networks:
+  rayuela-network:
+    name: rayuela-network
+    driver: bridge
+  # Red compartida con Nextcloud para el flujo N8N-02 (informe ejecutivo -> WebDAV).
+  # La crea este stack: asi "docker compose up" no depende de que Nextcloud este levantado.
+  # nextcloud/compose.nextcloud.yaml la declara como externa y se une a ella.
+  integracion-net:
+    name: integracion-net
+    driver: bridge
+
+# Docker Secrets (CARD-20 / SEC-01): cada secreto es un archivo de ./secrets (ignorado por git).
+# Se crean con "node scripts/init-secrets.js" (el mismo comando en Windows, Linux y macOS).
+# Dentro del contenedor aparecen en /run/secrets/<nombre>; no se ven con "docker inspect".
+secrets:
+  db_password:
+    file: ./secrets/db_password
+  replicator_password:
+    file: ./secrets/replicator_password
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  pgadmin_password:
+    file: ./secrets/pgadmin_password
+  grafana_admin_password:
+    file: ./secrets/grafana_admin_password
+  mantis_db_password:
+    file: ./secrets/mantis_db_password
+  mantis_db_root_password:
+    file: ./secrets/mantis_db_root_password
+  mantis_crypto_salt:
+    file: ./secrets/mantis_crypto_salt
+  gemini_api_key:
+    file: ./secrets/gemini_api_key
+  mercadopago_access_token:
+    file: ./secrets/mercadopago_access_token
+  email_pass:
+    file: ./secrets/email_pass
+  honeypot_webhook_token:
+    file: ./secrets/honeypot_webhook_token
+  # Alta disponibilidad (CARD-08): usuario de monitoreo creado automaticamente en el primer arranque del cluster.
+  monitor_password:
+    file: ./secrets/monitor_password
+  # Diagnostico con IA (n8n + Qdrant): clave de Qdrant y token del webhook que recibe las fallas.
+  qdrant_api_key:
+    file: ./secrets/qdrant_api_key
+  diagnostico_webhook_token:
+    file: ./secrets/diagnostico_webhook_token
+
+volumes:
+  # El volumen "rayuela_postgres_data" del PostgreSQL de un solo nodo ya no se usa (queda en Docker sin tocar,
+  # por si hay que volver atras con "git checkout dev"). El cluster nuevo usa sus propios volumenes.
+  patroni1_data:
+    name: rayuela_patroni1_data
+  patroni2_data:
+    name: rayuela_patroni2_data
+  etcd1_data:
+    name: rayuela_etcd1_data
+  etcd2_data:
+    name: rayuela_etcd2_data
+  etcd3_data:
+    name: rayuela_etcd3_data
+  qdrant_data:
+    name: rayuela_qdrant_data
+  pgadmin_data:
+    name: rayuela_pgadmin_data
+  prometheus_data:
+    name: rayuela_prometheus_data
+  grafana_data:
+    name: rayuela_grafana_data
+  loki_data:
+    name: rayuela_loki_data
+  mantis_db_data:
+    name: rayuela_mantis_db_data
+  n8n_data:
+    name: rayuela_n8n_data
+  backups_data:
+    name: rayuela_backups_data
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # BASE VECTORIAL — Qdrant (diagnostico con IA)
+  # Guarda el manual operativo (docs/manual-operativo) como vectores para que el agente de n8n lo consulte (RAG).
+  # Es un dato derivado: si se pierde, se reconstruye ejecutando el flujo "IA-01 Carga del manual en Qdrant".
+  # No se publica al equipo; exige una clave de API (secreto qdrant_api_key) que se pasa con un envoltorio de
+  # arranque, igual que PgBouncer, para que no aparezca en "docker inspect".
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    container_name: rayuela-qdrant
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export QDRANT__SERVICE__API_KEY="$$(cat /run/secrets/qdrant_api_key)" && exec ./entrypoint.sh
+    volumes:
+      - qdrant_data:/qdrant/storage
+    secrets:
+      - qdrant_api_key
+    networks:
+      - rayuela-network
+    expose:
+      - "6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ===========================================================================
+  # CAPA DE DATOS
+  # ===========================================================================
+
+  # ---------------------------------------------------------------------------
+  # ALTA DISPONIBILIDAD DE LA BASE — Patroni (2 nodos) + etcd (3) + HAProxy — CARD-08
+  #   Failover automatico: si cae el lider, la replica se promueve sola (~30 s) y el nodo caido vuelve como replica.
+  #   Replicacion ASINCRONA (synchronous_mode: false): si el lider cae pueden perderse las ultimas escrituras que la
+  #   replica aun no recibio, y una lectura por la replica puede ir un instante atrasada (ver ha/README.md).
+  #   Escrituras de la app: backend -> PgBouncer:6432 -> HAProxy:5000 -> lider. Lecturas: backend -> HAProxy:5001.
+  #   Estado del cluster:   docker exec rayuela-patroni1 patronictl list
+  #   Panel de HAProxy:     http://127.0.0.1:7000
+  #   Detalle y pruebas:    ha/README.md
+  # La base NO se publica al host: toda la aplicacion entra por HAProxy (5000 escritura / 5001 lectura).
+  # ---------------------------------------------------------------------------
+
+  # etcd: arbitro del cluster (guarda "quien es el lider"). 3 miembros = tolera la caida de 1.
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: rayuela-etcd1
+    restart: unless-stopped
+    command: >
+      etcd --name etcd1 --data-dir /etcd-data
+      --initial-advertise-peer-urls http://etcd1:2380
+      --listen-peer-urls http://0.0.0.0:2380
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd1:2379
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token rayuela-etcd-token
+      --initial-cluster-state new
+    volumes:
+      - etcd1_data:/etcd-data
+    networks:
+      - rayuela-network
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: rayuela-etcd2
+    restart: unless-stopped
+    command: >
+      etcd --name etcd2 --data-dir /etcd-data
+      --initial-advertise-peer-urls http://etcd2:2380
+      --listen-peer-urls http://0.0.0.0:2380
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd2:2379
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token rayuela-etcd-token
+      --initial-cluster-state new
+    volumes:
+      - etcd2_data:/etcd-data
+    networks:
+      - rayuela-network
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: rayuela-etcd3
+    restart: unless-stopped
+    command: >
+      etcd --name etcd3 --data-dir /etcd-data
+      --initial-advertise-peer-urls http://etcd3:2380
+      --listen-peer-urls http://0.0.0.0:2380
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd3:2379
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token rayuela-etcd-token
+      --initial-cluster-state new
+    volumes:
+      - etcd3_data:/etcd-data
+    networks:
+      - rayuela-network
+
+  # Nodos PostgreSQL 16 + Patroni (imagen Spilo de Zalando). Los dos son iguales: el que gana la eleccion es el lider.
+  # Los usuarios y claves se crean solos en el primer arranque desde los Docker Secrets (ver ha/patroni-entrypoint.sh).
+  patroni1:
+    image: ghcr.io/zalando/spilo-16:3.3-p3
+    container_name: rayuela-patroni1
+    hostname: patroni1
+    restart: unless-stopped
+    # Con bases grandes el checkpoint de apagado tarda mas de los 10 s que Docker da por defecto: sin esto lo mata
+    # (SIGKILL) a medio apagar y el nodo, al volver, necesita pg_rewind y WAL que el otro nodo ya pudo borrar.
+    stop_grace_period: 60s
+    shm_size: 256mb
+    entrypoint: ["/bin/sh", "/hook/patroni-entrypoint.sh"]
+    environment:
+      SCOPE: rayuela-cluster
+      PATRONI_NAME: patroni1
+      ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+      DB_NAME: ${DB_NAME:-rayuela}
+    volumes:
+      - patroni1_data:/home/postgres/pgdata
+      - ./ha/patroni-entrypoint.sh:/hook/patroni-entrypoint.sh:ro
+      - ./ha/patroni-post-init.sh:/hook/patroni-post-init.sh:ro
+    secrets:
+      - db_password
+      - replicator_password
+      - monitor_password
+    networks:
+      - rayuela-network
+    expose:
+      - "5432"
+      - "8008"
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  patroni2:
+    image: ghcr.io/zalando/spilo-16:3.3-p3
+    container_name: rayuela-patroni2
+    hostname: patroni2
+    restart: unless-stopped
+    stop_grace_period: 60s
+    shm_size: 256mb
+    entrypoint: ["/bin/sh", "/hook/patroni-entrypoint.sh"]
+    environment:
+      SCOPE: rayuela-cluster
+      PATRONI_NAME: patroni2
+      ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+      DB_NAME: ${DB_NAME:-rayuela}
+    volumes:
+      - patroni2_data:/home/postgres/pgdata
+      - ./ha/patroni-entrypoint.sh:/hook/patroni-entrypoint.sh:ro
+      - ./ha/patroni-post-init.sh:/hook/patroni-post-init.sh:ro
+    secrets:
+      - db_password
+      - replicator_password
+      - monitor_password
+    networks:
+      - rayuela-network
+    expose:
+      - "5432"
+      - "8008"
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # Punto de entrada unico a la base. Healthy cuando existe un lider al que escribir.
+  haproxy:
+    image: haproxy:alpine
+    container_name: rayuela-haproxy
+    restart: unless-stopped
+    volumes:
+      - ./ha/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    # Solo el panel de estado, y solo desde este equipo. 5000 y 5001 son internos.
+    ports:
+      - "127.0.0.1:7000:7000"
+    networks:
+      - rayuela-network
+    depends_on:
+      - patroni1
+      - patroni2
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:7000/;csv' | grep -E '^primary,patroni[0-9],' | grep -q ',UP,'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # SERVICIO DE BACKUP AUTOMATIZADO — CARD-05
+  #   Backup manual:         docker exec -it rayuela-backup sh /usr/local/bin/backup.sh
+  #   Listar backups:        docker exec -it rayuela-backup ls -lh /backups
+  #   Restaurar un backup:   docker exec -it rayuela-backup sh /usr/local/bin/restore.sh /backups/ARCHIVO.sql.gz NOMBRE_BASE_DESTINO
+  #     ejemplo:             ... restore.sh /backups/ARCHIVO.sql.gz rayuela_test_restore
+  # ---------------------------------------------------------------------------
+  backup:
+    build: ./backup
+    container_name: rayuela-backup
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    environment:
+      DB_HOST: haproxy
+      DB_PORT: 5000
+      DB_NAME: ${DB_NAME:-rayuela}
+      DB_USER: ${DB_USER:-postgres}
+      TZ: America/Argentina/Jujuy
+    volumes:
+      - backups_data:/backups
+    secrets:
+      - db_password
+    networks:
+      - rayuela-network
+    depends_on:
+      haproxy:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # POOLER DE CONEXIONES — PgBouncer en puerto 6432 — CARD-08
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: rayuela-pgbouncer
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /etc/pgbouncer:uid=70,gid=70,mode=0755
+      - /tmp
+    restart: unless-stopped
+    # La imagen no lee DB_PASSWORD_FILE: el envoltorio carga el secreto solo en el entorno
+    # del proceso de PgBouncer (no aparece en "docker inspect").
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export DB_PASSWORD="$$(cat /run/secrets/db_password)" && exec /entrypoint.sh "$$@"
+      - --
+    command: ["/usr/bin/pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    secrets:
+      - db_password
+    environment:
+      DB_USER: postgres
+      DB_HOST: haproxy
+      DB_PORT: 5000
+      DB_NAME: ${DB_NAME:-rayuela}
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 150
+      DEFAULT_POOL_SIZE: 25
+      LISTEN_PORT: 6432
+    networks:
+      - rayuela-network
+    ports:
+      - "6432:6432"
+    depends_on:
+      haproxy:
+        condition: service_healthy
+        
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: rayuela-pgadmin
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@rayuela.com}
+      PGADMIN_DEFAULT_PASSWORD_FILE: /run/secrets/pgadmin_password
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+    secrets:
+      - pgadmin_password
+    networks:
+      - rayuela-network
+    ports:
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      haproxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/misc/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # ===========================================================================
+  # CAPA DE APLICACIÓN — SLOT BLUE (perfil: blue)
+  # ===========================================================================
+
+  backend-blue:
+    # Imagen local del backend. Si "docker compose up" falla con "pull access denied for rayuela-backend",
+    # falta construirla:  docker build -t rayuela-backend:1.1.0 .   (o definir BACKEND_BLUE_IMAGE con otra imagen).
+    image: ${BACKEND_BLUE_IMAGE:-rayuela-backend:1.1.0}
+    container_name: rayuela-backend-blue
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    profiles:
+      - blue
+    # Sin env_file: el backend solo recibe lo que se declara aqui (los secretos van por /run/secrets).
+    environment:
+      NODE_ENV: production
+      EMAIL_USER: ${EMAIL_USER:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      PORT: 3000
+      # Escritura: backend -> PgBouncer:6432 -> HAProxy:5000 -> lider (PgBouncer agrupa conexiones; HAProxy sigue al lider).
+      # Lectura: backend -> HAProxy:5001 -> lider o replica. La replica es asincronica: una lectura puede ir un instante
+      # atrasada respecto de una escritura recien confirmada (no se fuerza leer del lider).
+      DB_HOST: pgbouncer
+      DB_PORT: 6432
+      DB_READ_HOST: haproxy
+      DB_READ_PORT: 5001
+      DB_NAME: ${DB_NAME:-rayuela}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
+      EMAIL_PASS_FILE: /run/secrets/email_pass
+      # Honeypot /api/admin/reset-all (CARD-21 / SEC-02): aviso a n8n, que abre el incidente en MantisBT.
+      HONEYPOT_WEBHOOK_URL: ${HONEYPOT_WEBHOOK_URL:-http://n8n:5678/webhook/honeypot-alerta}
+      HONEYPOT_WEBHOOK_TOKEN_FILE: /run/secrets/honeypot_webhook_token
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
+      SLOT: blue
+    secrets:
+      - db_password
+      - jwt_secret
+      - gemini_api_key
+      - mercadopago_access_token
+      - email_pass
+      - honeypot_webhook_token
+    networks:
+      - rayuela-network
+    expose:
+      - "3000"
+    depends_on:
+      haproxy:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ===========================================================================
+  # CAPA DE APLICACIÓN — SLOT GREEN (perfil: green)
+  # ===========================================================================
+
+  backend-green:
+    # Imagen local del backend. Si "docker compose up" falla con "pull access denied for rayuela-backend",
+    # falta construirla:  docker build -t rayuela-backend:1.1.0 .   (o definir BACKEND_GREEN_IMAGE con otra imagen).
+    image: ${BACKEND_GREEN_IMAGE:-rayuela-backend:1.1.0}
+    container_name: rayuela-backend-green
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    profiles:
+      - green
+    # Sin env_file: el backend solo recibe lo que se declara aqui (los secretos van por /run/secrets).
+    environment:
+      NODE_ENV: production
+      EMAIL_USER: ${EMAIL_USER:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      PORT: 3000
+      # Escritura: backend -> PgBouncer:6432 -> HAProxy:5000 -> lider (PgBouncer agrupa conexiones; HAProxy sigue al lider).
+      # Lectura: backend -> HAProxy:5001 -> lider o replica. La replica es asincronica: una lectura puede ir un instante
+      # atrasada respecto de una escritura recien confirmada (no se fuerza leer del lider).
+      DB_HOST: pgbouncer
+      DB_PORT: 6432
+      DB_READ_HOST: haproxy
+      DB_READ_PORT: 5001
+      DB_NAME: ${DB_NAME:-rayuela}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
+      MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
+      EMAIL_PASS_FILE: /run/secrets/email_pass
+      # Honeypot /api/admin/reset-all (CARD-21 / SEC-02): aviso a n8n, que abre el incidente en MantisBT.
+      HONEYPOT_WEBHOOK_URL: ${HONEYPOT_WEBHOOK_URL:-http://n8n:5678/webhook/honeypot-alerta}
+      HONEYPOT_WEBHOOK_TOKEN_FILE: /run/secrets/honeypot_webhook_token
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
+      SLOT: green
+    secrets:
+      - db_password
+      - jwt_secret
+      - gemini_api_key
+      - mercadopago_access_token
+      - email_pass
+      - honeypot_webhook_token
+    networks:
+      - rayuela-network
+    expose:
+      - "3000"
+    depends_on:
+      haproxy:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ===========================================================================
+  # CAPA DE PRESENTACIÓN — Frontend Angular 22 con Nginx
+  # ===========================================================================
+
+  frontend:
+    image: rayuela-frontend:1.0.0
+    container_name: rayuela-frontend
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/cache/nginx
+      - /tmp
+    restart: unless-stopped
+    networks:
+      - rayuela-network
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ===========================================================================
+  # PROXY INVERSO FRONTAL — Nginx enruta tráfico al slot activo
+  # ===========================================================================
+
+  nginx-proxy:
+    image: nginx:alpine
+    container_name: rayuela-nginx-proxy
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+      - /var/cache/nginx
+      - /tmp
+    restart: unless-stopped
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - rayuela-network
+    ports:
+      - "80:80"
+    depends_on:
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/health-proxy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ===========================================================================
+  # PUBLICACIÓN SEGURA EN INTERNET — Cloudflare Tunnel (CARD-15 / NET-01)
+  # ===========================================================================
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: rayuela-tunnel
+    # Endurecimiento (CARD-20): sin privilegios nuevos y sistema de archivos de solo lectura. Probado: registra el túnel
+    # y corre como usuario sin privilegios.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    command: >-
+      tunnel
+      --no-autoupdate
+      --url http://nginx-proxy:80
+    networks:
+      - rayuela-network
+    depends_on:
+      nginx-proxy:
+        condition: service_healthy
+
+  # ===========================================================================
+  # CAPA DE OBSERVABILIDAD — Prometheus, Grafana, Loki & Exporters (CARD-13 / OBS-01)
+  # ===========================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: rayuela-prometheus
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9091:9090"
+    networks:
+      - rayuela-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rayuela-grafana
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/grafana_admin_password
+    secrets:
+      - grafana_admin_password
+    networks:
+      - rayuela-network
+    depends_on:
+      - prometheus
+
+  loki:
+    image: grafana/loki:latest
+    container_name: rayuela-loki
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    command:
+      - '-config.file=/etc/loki/loki.yml'
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    networks:
+      - rayuela-network
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: rayuela-promtail
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+    command:
+      - '-config.file=/etc/promtail/config.yml'
+    volumes:
+      - ./monitoring/promtail/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    networks:
+      - rayuela-network
+    depends_on:
+      - loki
+
+  node_exporter:
+    image: prom/node-exporter:latest
+    container_name: rayuela-node-exporter
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    command:
+      - '--path.rootfs=/host'
+    volumes:
+      - '/:/host:ro,'
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - rayuela-network
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: rayuela-cadvisor
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - rayuela-network
+
+  # Un exportador por nodo (cada uno ve su propio rol, retraso y estado de replicacion). Usuario "monitorizacion"
+  # (rol pg_monitor), creado solo en el primer arranque del cluster.
+  postgres_exporter1:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: rayuela-postgres-exporter1
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_URI=patroni1:5432/${DB_NAME:-rayuela}?sslmode=disable
+      - DATA_SOURCE_USER=monitorizacion
+      - DATA_SOURCE_PASS_FILE=/run/secrets/monitor_password
+    secrets:
+      - monitor_password
+    networks:
+      - rayuela-network
+    depends_on:
+      patroni1:
+        condition: service_healthy
+
+  # Un exportador por nodo (cada uno ve su propio rol, retraso y estado de replicacion). Usuario "monitorizacion"
+  # (rol pg_monitor), creado solo en el primer arranque del cluster.
+  postgres_exporter2:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: rayuela-postgres-exporter2
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_URI=patroni2:5432/${DB_NAME:-rayuela}?sslmode=disable
+      - DATA_SOURCE_USER=monitorizacion
+      - DATA_SOURCE_PASS_FILE=/run/secrets/monitor_password
+    secrets:
+      - monitor_password
+    networks:
+      - rayuela-network
+    depends_on:
+      patroni2:
+        condition: service_healthy
+
+  # ===========================================================================
+  # AUTOMATIZACIÓN — n8n (CARD sprint 4 / N8N-01)
+  # Despliegue de n8n con persistencia (volumen n8n_data) y protección de credenciales
+  # (basic auth + N8N_ENCRYPTION_KEY). Los flujos se configuran en el editor de n8n con
+  # credenciales (MantisBT API, Telegram, Email/SMTP). La base de datos interna de n8n
+  # es SQLite persistente dentro del volumen.
+  # ===========================================================================
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: rayuela-n8n
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    environment:
+      - N8N_HOST=http://localhost:${N8N_PORT:-5678}
+      - N8N_PORT=${N8N_PORT:-5678}
+      - N8N_BASE_URL=http://localhost:${N8N_PORT:-5678}
+      - WEBHOOK_URL=http://localhost:${N8N_PORT:-5678}
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:-changeme}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-}
+      - TZ=America/Argentina/Jujuy
+      - GENERIC_TIMEZONE=America/Argentina/Jujuy
+      - NODE_FUNCTION_ALLOW_BUILTIN=fs,zlib
+      - MANTIS_API_TOKEN=${MANTIS_API_TOKEN:-}
+      - MANTIS_PROJECT_ID=${MANTIS_PROJECT_ID:-1}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - backups_data:/backups:ro
+      # Manual operativo para el asistente de diagnostico con IA: el flujo "IA-01" lo lee y lo carga en Qdrant.
+      - ./docs/manual-operativo:/manual:ro
+    ports:
+      - "127.0.0.1:${N8N_PORT:-5678}:5678"
+    networks:
+      - rayuela-network
+      - integracion-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+
+  # ===========================================================================
+  # GESTIÓN DE INCIDENCIAS — MantisBT + MariaDB (CARD-19 / MAN-01)
+  # Perfil "mantis": docker compose --profile mantis up -d mantis
+  # Las contraseñas son Docker Secrets (ver el bloque "secrets" al inicio): no hay valores en el repositorio.
+  # ===========================================================================
+
+  mantis-db:
+    image: mariadb:10.11
+    container_name: rayuela-mantis-db
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run/mysqld
+      - /tmp
+    restart: unless-stopped
+    profiles:
+      - mantis
+    environment:
+      MARIADB_DATABASE: bugtracker
+      MARIADB_USER: mantis
+      MARIADB_PASSWORD_FILE: /run/secrets/mantis_db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/mantis_db_root_password
+    volumes:
+      - mantis_db_data:/var/lib/mysql
+    secrets:
+      - mantis_db_password
+      - mantis_db_root_password
+    networks:
+      - rayuela-network
+    expose:
+      - "3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Imagen de la comunidad (xlrl/mantisbt), fijada por version y por digest: no se actualiza sola.
+  # La configuracion de Mantis se monta desde mantis/config_inc.php (la imagen no trae una).
+  mantis:
+    image: xlrl/mantisbt:2.28.4@sha256:a1253afdea1702dabbfef712a6f596247582d2fc61c249b118ea4a5a114fe226
+    container_name: rayuela-mantis
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    profiles:
+      - mantis
+    environment:
+      MANTIS_DB_HOST: mantis-db
+      MANTIS_DB_NAME: bugtracker
+      MANTIS_DB_USER: mantis
+      MANTIS_DB_PASSWORD_FILE: /run/secrets/mantis_db_password
+      MANTIS_CRYPTO_SALT_FILE: /run/secrets/mantis_crypto_salt
+      MANTIS_BASE_URL: http://localhost:${MANTIS_PORT:-8081}/
+      MANTIS_TIMEZONE: America/Argentina/Jujuy
+      # 1 solo durante la instalacion del esquema (habilita /admin); luego 0.
+      MANTIS_ENABLE_ADMIN: ${MANTIS_ENABLE_ADMIN:-0}
+    volumes:
+      - ./mantis/config_inc.php:/var/www/html/config/config_inc.php:ro
+    secrets:
+      - mantis_db_password
+      - mantis_crypto_salt
+    networks:
+      - rayuela-network
+    # Solo accesible desde el propio equipo (igual que Grafana y pgAdmin).
+    ports:
+      - "127.0.0.1:${MANTIS_PORT:-8081}:80"
+    depends_on:
+      mantis-db:
+        condition: service_healthy

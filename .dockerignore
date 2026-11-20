@@ -1,0 +1,27 @@
+# Dependencias — se instalan dentro del contenedor
+node_modules
+
+# Variables de entorno — NUNCA en imagen
+.env
+.env.local
+
+# Git
+.git
+.gitignore
+
+# Logs y debug
+npm-debug.log*
+*.log
+logs/
+
+# Archivos de desarrollo
+*.md
+coverage/
+
+# Compose y configs de infra (no van en la imagen)
+docker-compose*.yml
+pgadmin/
+
+# IDEs
+.vscode/
+.idea/

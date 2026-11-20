@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const { leerSecreto } = require('../../config/secrets');
 
 class EmailService {
   constructor() {
@@ -6,7 +7,7 @@ class EmailService {
       service: 'gmail',
       auth: {
         user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
+        pass: leerSecreto('EMAIL_PASS')
       }
     });
   }
@@ -31,7 +32,7 @@ class EmailService {
 
     try {
       // Verificar si las credenciales están vacías para no tumbar la app en pruebas locales
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      if (!process.env.EMAIL_USER || !leerSecreto('EMAIL_PASS')) {
         console.log(`\n🔑 [MOCK EMAIL] OTP enviado a ${emailDestino}: ${codigoOTP}\n`);
         return true;
       }

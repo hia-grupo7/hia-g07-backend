@@ -1,0 +1,62 @@
+groups:
+  - name: rayuela-observability
+    interval: 30s
+    rules:
+      - alert: PrometheusTargetMissing
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scrapeo fallido en job {{ $labels.job }}"
+          description: "El job {{ $labels.job }} en la instancia {{ $labels.instance }} no esta respondiendo metricas."
+
+      - alert: BackendDown
+        expr: up{job="rayuela-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend Rayuela sin responder"
+          description: "El backend en {{ $labels.instance }} no responde al scrape de /api/metrics."
+
+      - alert: RayuelaHighPaymentFailures
+        expr: rate(rayuela_payment_failure_total[5m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pagos fallidos detectados en Rayuela"
+          description: "Se registraron intentos de pago fallidos en los ultimos 5 minutos (tasa: {{ $value }})."
+
+  # Alta disponibilidad de la base (CARD-08): Patroni + HAProxy.
+  - name: rayuela-base-de-datos
+    interval: 15s
+    rules:
+      - alert: PatroniNodoCaido
+        expr: up{job="patroni"} == 0
+        for: 20s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nodo {{ $labels.nodo }} del cluster de base de datos caido"
+          description: "Patroni no responde en {{ $labels.nodo }}. Si era el lider, la replica se promueve sola en ~30 s."
+
+      - alert: PatroniSinLider
+        expr: sum(patroni_primary) == 0 or absent(patroni_primary)
+        for: 20s
+        labels:
+          severity: critical
+        annotations:
+          summary: "El cluster de base de datos no tiene lider"
+          description: "Ningun nodo se reporta como primario: las escrituras estan detenidas hasta que Patroni elija un lider."
+
+      - alert: PostgresReplicacionConRetraso
+        expr: max(pg_replication_lag_seconds) > 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Retraso de replicacion de {{ $value }} s"
+          description: "La replica va atrasada respecto del lider: si el lider cae ahora podria perderse trabajo (modo asincronico)."
+

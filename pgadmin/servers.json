@@ -1,0 +1,26 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Rayuela - Escritura (lider del cluster)",
+      "Group": "Rayuela Servers",
+      "Host": "haproxy",
+      "Port": 5000,
+      "MaintenanceDB": "postgres",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Shared": true,
+      "Comments": "Entra por HAProxy:5000, que siempre apunta al nodo lider de Patroni (cambia solo si hay failover)."
+    },
+    "2": {
+      "Name": "Rayuela - Lectura (lider o replica)",
+      "Group": "Rayuela Servers",
+      "Host": "haproxy",
+      "Port": 5001,
+      "MaintenanceDB": "postgres",
+      "Username": "postgres",
+      "SSLMode": "prefer",
+      "Shared": true,
+      "Comments": "Entra por HAProxy:5001 (lider o replica, segun disponibilidad)."
+    }
+  }
+}
