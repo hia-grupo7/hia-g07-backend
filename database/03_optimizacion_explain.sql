@@ -91,11 +91,19 @@ ON public.auditorias ("tablaAfectada", "registroId");
 CREATE INDEX IF NOT EXISTS idx_auditorias_fecha_desc 
 ON public.auditorias (fecha DESC);
 
--- Índices en tablas relacionales para acelerar búsquedas de negocio (Consultas 5, 6 y 7)
-CREATE INDEX IF NOT EXISTS idx_libros_categoria ON public.libros (category);
-CREATE INDEX IF NOT EXISTS idx_inventory_precio ON public.inventory (price);
+-- Reservas próximas a vencer (Consulta 6): 44,9 ms -> 7,5 ms.
 CREATE INDEX IF NOT EXISTS idx_reservas_estado_vencimiento ON public.reservas (estado, "fechaVencimiento");
-CREATE INDEX IF NOT EXISTS idx_ventas_usuario_estado ON public.ventas ("idUsuario", estado);
+
+-- Ventas de un usuario por estado (Consulta 7). Índice de cobertura: INCLUDE guarda id, total e idCupon
+-- en el propio índice, así la consulta se resuelve con Index Only Scan sin leer la tabla
+-- (161 ms -> 53 ms; 18.869 -> 1.909 bloques). Pesa 112 MB: con INCLUDE no se deduplican las entradas.
+CREATE INDEX IF NOT EXISTS idx_ventas_usuario_estado_cob
+ON public.ventas ("idUsuario", estado) INCLUDE (id, total, "idCupon");
+
+-- Consulta 5 (libros + inventario): NO se crean índices. Ambas tablas tienen pocas filas (catálogo de 12 libros)
+-- y PostgreSQL elige Seq Scan porque leer una página es más barato que recorrer un índice. Los índices
+-- idx_libros_categoria e idx_inventory_precio de la primera versión se midieron sin efecto y se eliminaron.
+-- Revisar esta decisión si el catálogo crece a miles de libros.
 
 -- Actualizar estadísticas con los nuevos índices
 ANALYZE;
