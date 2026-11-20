@@ -90,6 +90,7 @@ const SECRETOS = [
   { nombre: 'jwt_secret', vars: ['JWT_SECRET'], tipo: 'infra', anterior: 'MiClaveSecretaSuperDificilDeAdivinarRayuela123!', largo: 64 },
   { nombre: 'pgadmin_password', vars: ['PGADMIN_DEFAULT_PASSWORD'], tipo: 'infra', anterior: 'pgadmin_rayuela_2024', largo: 24 },
   { nombre: 'grafana_admin_password', vars: ['GRAFANA_ADMIN_PASSWORD'], tipo: 'infra', anterior: 'admin123', largo: 24 },
+  { nombre: 'honeypot_webhook_token', vars: ['HONEYPOT_WEBHOOK_TOKEN'], tipo: 'infra', anterior: '', largo: 48 },
   { nombre: 'mantis_db_password', vars: ['MANTIS_DB_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, mantis: true },
   { nombre: 'mantis_db_root_password', vars: ['MANTIS_DB_ROOT_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, mantis: true },
   { nombre: 'mantis_crypto_salt', vars: ['MANTIS_CRYPTO_SALT'], tipo: 'infra', anterior: '', largo: 64, mantis: true },

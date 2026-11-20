@@ -72,7 +72,8 @@ Tablas: `usuarios`, `roles`, `libros`, `inventory`, `ventas`, `venta_detalles`, 
 | `/api/ventas` | Ventas y pagos |
 | `/api/cupones` | Cupones de descuento |
 | `/api/dashboard` | Métricas para el panel administrativo |
-| `/api/admin/usuario` | Gestión de usuarios/empleados |
+| `/api/admin/usuario` | Gestión de usuarios/empleados (requiere token y rol admin) |
+| `/api/admin/reset-all` | Endpoint trampa (honeypot): no hace nada real, ver [Honeypot](#honeypot-endpoint-trampa) |
 | `/api/auditorias` | Registro de auditoría |
 | `/api/chat` | Asistente con IA (Gemini) |
 | `/api/docs` | Documentación Swagger |
@@ -156,6 +157,7 @@ node scripts/init-secrets.js     # el mismo comando en Windows, Linux y macOS (r
 | `pgadmin_password`, `grafana_admin_password` | pgAdmin, Grafana |
 | `mantis_db_password`, `mantis_db_root_password`, `mantis_crypto_salt` | MantisBT y su base MariaDB |
 | `gemini_api_key`, `mercadopago_access_token`, `email_pass` | backend (claves de terceros) |
+| `honeypot_webhook_token` | backend y n8n (token del webhook del honeypot; no entra en la rotación automática) |
 
 Sin Docker (`npm run dev`) el backend sigue leyendo esos valores de las variables de entorno del `.env`.
 
@@ -227,7 +229,26 @@ completa.
 stack, es decir, **todo** `/api/` (incluidos `/api/metrics` y `/api/docs`). Levantalo solo el tiempo necesario y revisá antes
 qué rutas quedan públicas.
 
+## Honeypot (endpoint trampa)
+
+`/api/admin/reset-all` (cualquier método) simula una ruta administrativa peligrosa pero **no ejecuta ninguna acción**: ningún
+usuario legítimo la usa, así que todo acceso es sospechoso. Por cada acceso el backend:
+
+1. Guarda una fila en `auditorias` (`accion = HONEYPOT`) con IP, cadena `X-Forwarded-For`, User-Agent, método, ruta, fecha y
+   cabeceras. De `Authorization` y `Cookie` solo se guarda que venían, no su valor.
+2. Suma `rayuela_honeypot_hits_total`.
+3. Avisa a n8n (`HONEYPOT_WEBHOOK_URL`, con la cabecera `X-Honeypot-Token`), que crea un incidente en MantisBT (categoría
+   *Seguridad & Accesos*, prioridad urgente, severidad mayor). Se avisa **una vez por IP cada 10 minutos**
+   (`HONEYPOT_VENTANA_MS`) para que un escáner no llene Mantis; el registro en `auditorias` es del 100% de los accesos.
+4. Responde `401 Acceso denegado. Token no proporcionado.`, igual que una ruta protegida.
+
+Si n8n no está disponible el acceso igual queda auditado y la respuesta no cambia. Para activar el aviso en una instalación nueva:
+`node scripts/init-secrets.js` (crea `secrets/honeypot_webhook_token` si falta), recrear el backend y ejecutar
+`python3 n8n/scripts/bootstrap_honeypot.py`. Probarlo: `curl -X POST http://localhost/api/admin/reset-all`.
+
 ## Gestión de incidencias (MantisBT)
+
+Qué hacer ante un incidente de seguridad (clasificación, guías por escenario y cierre): [`docs/seguridad/protocolo-respuesta-incidentes.md`](docs/seguridad/protocolo-respuesta-incidentes.md).
 
 Mantis corre en el perfil `mantis` del compose, en `http://localhost:8081` (solo desde tu equipo). Sus secretos se crean
 con `node scripts/init-secrets.js` (ver arriba), **antes** del primer `up`.
@@ -270,6 +291,13 @@ El pipeline vive en `.github/workflows/ci-cd.yml` (GitHub Actions) y se ejecuta 
 Cada etapa depende de la anterior: si fallan los tests o Trivy, no se versiona ni se publica nada.
 
 **Versionado.** `fix` sube el parche, `feat` sube el minor y `BREAKING CHANGE` (o `!`) sube el major. En `dev` salen prereleases (`v1.1.0-dev.1`) y en `main` versiones estables (`v1.1.0`). Como `dev` y `main` se fusionan con squash o merge commit, **el título del Pull Request debe seguir Conventional Commits** (por ejemplo `feat(CARD-12): agregar filtro por categoría`). Un título sin tipo (`[CARD-12] ...`) no genera versión.
+
+**Escaneo de seguridad dinámico (OWASP ZAP).** Un workflow aparte, `.github/workflows/dast-zap.yml`, ataca el backend ya
+levantado dentro del runner (con una base PostgreSQL y claves efímeras que se descartan al terminar) usando `swagger_output.json`
+como mapa de endpoints, y publica el informe (HTML, JSON y Markdown) como artefacto `informe-zap`. **Es informativo: no está entre
+los checks obligatorios y no bloquea PRs.** Corre en PRs que cambian el código del backend en modo *seguro* (solo análisis pasivo)
+y, a mano desde la pestaña Actions, en modo *seguro* o *activo* (ataques reales: inyección SQL, XSS, etc.). Para el análisis se
+relajan los límites de login y chat; el escaneo no detecta rutas sin autenticación, eso se revisa aparte.
 
 **Secretos.** El pipeline usa solo el `GITHUB_TOKEN` automático. No hay credenciales en el repositorio.
 

@@ -53,6 +53,8 @@ secrets:
     file: ./secrets/mercadopago_access_token
   email_pass:
     file: ./secrets/email_pass
+  honeypot_webhook_token:
+    file: ./secrets/honeypot_webhook_token
 
 volumes:
   postgres_data:
@@ -274,6 +276,9 @@ services:
       GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
       MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
       EMAIL_PASS_FILE: /run/secrets/email_pass
+      # Honeypot /api/admin/reset-all (CARD-21 / SEC-02): aviso a n8n, que abre el incidente en MantisBT.
+      HONEYPOT_WEBHOOK_URL: ${HONEYPOT_WEBHOOK_URL:-http://n8n:5678/webhook/honeypot-alerta}
+      HONEYPOT_WEBHOOK_TOKEN_FILE: /run/secrets/honeypot_webhook_token
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
       SLOT: blue
@@ -283,6 +288,7 @@ services:
       - gemini_api_key
       - mercadopago_access_token
       - email_pass
+      - honeypot_webhook_token
     networks:
       - rayuela-network
     expose:
@@ -331,6 +337,9 @@ services:
       GEMINI_API_KEY_FILE: /run/secrets/gemini_api_key
       MERCADOPAGO_ACCESS_TOKEN_FILE: /run/secrets/mercadopago_access_token
       EMAIL_PASS_FILE: /run/secrets/email_pass
+      # Honeypot /api/admin/reset-all (CARD-21 / SEC-02): aviso a n8n, que abre el incidente en MantisBT.
+      HONEYPOT_WEBHOOK_URL: ${HONEYPOT_WEBHOOK_URL:-http://n8n:5678/webhook/honeypot-alerta}
+      HONEYPOT_WEBHOOK_TOKEN_FILE: /run/secrets/honeypot_webhook_token
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
       TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-2}
       SLOT: green
@@ -340,6 +349,7 @@ services:
       - gemini_api_key
       - mercadopago_access_token
       - email_pass
+      - honeypot_webhook_token
     networks:
       - rayuela-network
     expose:
