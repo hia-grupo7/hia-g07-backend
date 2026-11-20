@@ -17,8 +17,9 @@ export PGPASSWORD_STANDBY="$(leer replicator_password)"
 export ALLOW_NOSSL=true
 
 # Configuracion dinamica inicial del cluster (se guarda en etcd la primera vez):
-#  - modo sincronico NO estricto: una escritura se confirma cuando la replica la tiene (RPO cero);
-#    si cae la replica, el servicio sigue en modo asincronico en vez de bloquear las escrituras.
+#  - replicacion ASINCRONA: el lider confirma sin esperar a la replica (commit mas rapido). Si el lider cae, pueden
+#    perderse las ultimas transacciones que la replica aun no recibio; Patroni no promueve una replica con mas de
+#    maximum_lag_on_failover (32 MB) de atraso. Para volver al modo sincronico: synchronous_mode: true.
 #  - wal_keep_size: WAL que el nodo conserva para las replicas. Con el valor por defecto (128 MB), si un nodo cae y
 #    el otro pasa a lider, el nodo caido no encuentra el WAL que necesita para volver (pg_rewind) y se queda en
 #    "starting" hasta que se lo reconstruye con "patronictl reinit". Con bases grandes (checkpoints largos) pasa
@@ -30,7 +31,7 @@ export SPILO_CONFIGURATION="
 bootstrap:
   post_init: bash /hook/patroni-post-init.sh zalandos
   dcs:
-    synchronous_mode: true
+    synchronous_mode: false
     postgresql:
       parameters:
         wal_keep_size: 2GB

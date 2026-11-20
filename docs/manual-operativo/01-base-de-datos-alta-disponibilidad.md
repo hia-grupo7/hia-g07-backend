@@ -3,15 +3,19 @@
 ## Cómo funciona
 
 - Hay dos nodos PostgreSQL 16 con Patroni (`rayuela-patroni1` y `rayuela-patroni2`). Siempre uno es **líder** (acepta
-  lecturas y escrituras) y el otro es **réplica sincrónica** (copia cada escritura antes de que se confirme).
+  lecturas y escrituras) y el otro es **réplica asincrónica** (copia las escrituras después de que se confirman).
 - Tres nodos etcd (`rayuela-etcd1/2/3`) guardan quién es el líder. Mientras queden dos etcd vivos, Patroni puede decidir.
 - HAProxy (`rayuela-haproxy`) es el único punto de entrada: el puerto 5000 va siempre al líder; el 5001 va a cualquier
-  nodo que pueda leer. El backend usa ambos. Si el líder cambia, HAProxy lo detecta en unos 4 segundos.
+  nodo que pueda leer. El backend **lee** por el 5001 y **escribe** a través de PgBouncer (`rayuela-pgbouncer:6432`), que a
+  su vez entra por el 5000. Si el líder cambia, HAProxy lo detecta en unos 4 segundos y PgBouncer sigue al nuevo líder.
+- Como la réplica es asincrónica, una lectura por el 5001 puede ver los datos un instante atrasados respecto de una
+  escritura recién confirmada. El backend no fuerza lecturas al líder.
 - **Failover automático:** si el líder cae, la réplica se promueve sola. Medido en pruebas: entre 25 y 30 segundos
   (el tiempo de vida del permiso de líder, `ttl`, es 30 s). Durante esa ventana las escrituras esperan; el backend
   reintenta durante unos 49 segundos, así que el usuario ve una respuesta lenta pero correcta en vez de un error.
-- **Modo sincrónico (no estricto):** una escritura confirmada ya está en la réplica, por eso en las pruebas no se
-  perdió ninguna escritura confirmada. Si cae la réplica, el servicio sigue y pasa a modo asincrónico para no bloquear.
+- **Modo asincrónico:** el líder confirma sin esperar a la réplica. Si el líder cae, pueden perderse las últimas
+  escrituras que la réplica aún no recibió (Patroni no promueve una réplica con más de 32 MB de atraso). Las pruebas con
+  0 pérdidas se midieron en modo sincrónico.
 - **Nodo que vuelve:** cuando se levanta el nodo caído, Patroni lo reconfigura solo como réplica (con `pg_rewind`) y
   lo resincroniza. Medido: vuelve a `streaming` en menos de 10 segundos.
 - La aplicación usa su propia base, `rayuela` (creada vacía en el primer arranque); la base `postgres` queda para uso interno de
@@ -70,8 +74,7 @@ sigue vivo, pero **no hay redundancia**: si ahora cae el líder, el servicio se 
 docker start rayuela-patroni2                   # reemplazar por el nodo caido
 docker exec rayuela-patroni1 patronictl list
 ```
-El modo sincrónico no estricto evita que las escrituras se bloqueen mientras no hay réplica; el sistema pasa a
-asincrónico hasta que la réplica vuelve.
+En modo asincrónico las escrituras no se bloquean mientras no hay réplica.
 
 **Importante:** una réplica caída por mucho tiempo hace que el líder conserve archivos de registro (WAL) para ella y
 el disco puede llenarse. Si va a estar caída más de unas horas, ver DB-09.
@@ -159,8 +162,8 @@ docker stats --no-stream rayuela-patroni1 rayuela-patroni2
 **Solución:** reducir la carga (por ejemplo, pausar una carga masiva), liberar CPU del equipo y esperar. Si el
 retraso no baja en 10 minutos, ver DB-07.
 
-**Riesgo:** con retraso alto, si el líder cae podría perderse lo último escrito. Con el modo sincrónico activo esto
-solo ocurre mientras la réplica esté en `catchup` y el sistema esté en modo asincrónico.
+**Riesgo:** con retraso alto, si el líder cae podría perderse lo último escrito. Al ser la replicación asincrónica, esto
+puede ocurrir siempre que haya retraso.
 
 ## DB-07. Un nodo no vuelve a streaming o quedó con datos viejos (reinicializar la réplica)
 
@@ -186,7 +189,8 @@ backend lo reintenta solo; (b) la aplicación se conectó por el puerto 5001 (le
 en solo lectura por falta de quórum de etcd (DB-05).
 
 **Solución:** si persiste más de un minuto, verificar `patronictl list` y la salud de etcd. Confirmar que el backend
-tiene `DB_HOST=haproxy` y `DB_PORT=5000` para escribir y `DB_READ_PORT=5001` solo para leer
+tiene `DB_HOST=pgbouncer` y `DB_PORT=6432` para escribir (PgBouncer reenvía al 5000 de HAProxy) y `DB_READ_HOST=haproxy`
+con `DB_READ_PORT=5001` solo para leer
 (`docker exec rayuela-backend-blue env | grep DB_`).
 
 ## DB-09. El disco se llena por registros WAL acumulados

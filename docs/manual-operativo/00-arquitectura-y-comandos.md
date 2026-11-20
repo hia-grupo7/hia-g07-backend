@@ -15,9 +15,9 @@ backend habla con la base de datos a través de HAProxy. La base de datos NO se 
 | Frontend (Angular) | `rayuela-frontend` | interno | Interfaz web |
 | Backend (Express) | `rayuela-backend-blue` o `rayuela-backend-green` | interno 3000 | API REST. Un solo slot activo a la vez |
 | Punto de entrada a la base | `rayuela-haproxy` | interno 5000 (escritura) y 5001 (lectura); panel en `http://127.0.0.1:7000` | Dirige las escrituras al líder y las lecturas al líder o a la réplica |
-| Base de datos (2 nodos) | `rayuela-patroni1`, `rayuela-patroni2` | interno 5432 y API de Patroni 8008 | PostgreSQL 16 con Patroni: uno es líder y el otro réplica sincrónica |
+| Base de datos (2 nodos) | `rayuela-patroni1`, `rayuela-patroni2` | interno 5432 y API de Patroni 8008 | PostgreSQL 16 con Patroni: uno es líder y el otro réplica asincrónica (puede ir un instante atrás del líder) |
 | Árbitro del clúster | `rayuela-etcd1`, `rayuela-etcd2`, `rayuela-etcd3` | interno 2379 | Guarda quién es el líder. Tolera la caída de uno |
-| Pool de conexiones | `rayuela-pgbouncer` | 6432 | Agrupa conexiones hacia HAProxy:5000 |
+| Pool de conexiones | `rayuela-pgbouncer` | 6432 | Agrupa las conexiones de escritura del backend y las reenvía a HAProxy:5000. Las lecturas del backend van directo a HAProxy:5001 |
 | Administración de la base | `rayuela-pgadmin` | `http://127.0.0.1:5050` | Cliente web de PostgreSQL |
 | Backups | `rayuela-backup` | interno | Copia diaria a las 03:00 en el volumen `rayuela_backups_data` |
 | Métricas | `rayuela-prometheus` | `http://127.0.0.1:9091` | Recolecta métricas |
