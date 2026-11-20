@@ -65,9 +65,11 @@ networks:
   nextcloud-net:
     driver: bridge
     internal: false
+  # La crea el stack principal (compose.yaml). Si Nextcloud se levanta solo, crearla antes:
+  #   docker network create integracion-net
   integracion-net:
     name: integracion-net
-    driver: bridge
+    external: true
 
 secrets:
   nc_db_password:
