@@ -1,7 +1,7 @@
 # N8N — Guía de Setup y Flujos de Automatización
 
-> **CARD:** N8N-01 (sprint 4)  
-> **Rama:** `feature/CARD-17-n8n-flujos-alertas`
+> **CARD:** N8N-02 (sprint 4)  
+> **Rama:** `feature/CARD-18-n8n-informe-ejecutivo-gemini`
 
 ---
 
@@ -16,6 +16,7 @@ Este módulo contiene los flujos de automatización de n8n para el proyecto **Ra
 | `00-error-handler.json` | N8N-00 Registro de Errores | Error interno | Workflow de error global que loguea fallos de cualquier otro workflow |
 | `01-alertas-infraestructura-mantisbt.json` | N8N-01 Fl.1 — Alertas de Infraestructura | Webhook (POST desde Grafana) | Recibe alertas de Grafana, crea ticket en MantisBT y notifica por email |
 | `02-verificacion-backups.json` | N8N-01 Fl.2 — Verificación de Backups | Schedule (04:00 AM diario) | Verifica integridad del backup más reciente de PostgreSQL y notifica por email si falla |
+| `03-informe-ejecutivo-gemini.json` | N8N-02 Fl.3 — Informe Ejecutivo Asistido por IA (Gemini 2.5 Flash) | Schedule (lunes 09:00) | Genera informe ejecutivo semanal con métricas del backend + análisis Gemini → guarda en Nextcloud (`/Informes_Ejecutivos`) y notifica por email |
 
 ---
 
@@ -120,6 +121,8 @@ Una vez que el stack está levantado y `n8n` está **healthy**, ejecutá el scri
 python3 n8n/scripts/bootstrap_fl1.py
 ```
 
+Además del bootstrap de Fl.1 y Fl.2, el script también importa y activa el workflow del **Flujo 3** (`03-informe-ejecutivo-gemini.json`) y configura las credenciales `Gemini API Key` y `Nextcloud WebDAV`.
+
 ### Opciones del bootstrap
 
 ```bash
@@ -220,6 +223,28 @@ Schedule (04:00)  →  Validar Backup (Code)  →  Registrar Resultado
 
 > El volumen `backups_data` es compartido entre el servicio `backup` (escritura) y `n8n` (solo lectura, montado como `:ro`).
 
+### Fl.3 — Informe Ejecutivo Asistido por IA (`03-informe-ejecutivo-gemini.json`)
+
+**Trigger:** Schedule semanal (lunes 09:00, timezone `America/Argentina/Jujuy`).
+
+**Flujo:**
+
+```
+Schedule (Lun 09:00)  →  Obtener Metricas (backend /api/dashboard + /api/metrics)
+                                        →  Consolidar Metricas  →  Generar Informe (Gemini 3.8 Flash)
+                                        →  Parsear Informe  →  Guardar Informe (Nextcloud WebDAV)
+                                                                                →  Enviar Informe (email)
+```
+
+**Qué hace:**
+1. Consulta métricas al backend (`/api/dashboard/metricas-cards`, `/api/dashboard/ventas-mensuales`, `/api/dashboard/top-libros`) y a `/api/metrics` (errores de pagos).
+2. Arma el payload de métricas y construye el prompt para Gemini 3.8 Flash (2.5 Flash fue discontinuado para cuentas nuevas).
+3. Gemini genera el informe ejecutivo en Markdown.
+4. n8n guarda el informe en Nextcloud (`/remote.php/dav/files/<user>/Informes_Ejecutivos/informe-YYYY-MM-DD.md`).
+5. Envía el informe por email (SMTP Gmail Rayuela).
+
+**Gestion de errores:** ramas de error hacia el workflow `N8N-00 - Registro de Errores` (`ncCuil3GfmQzaetM).
+
 ---
 
 ## 6. Actualizar el proyecto (pull de la rama)
@@ -291,5 +316,6 @@ n8n/
 └── workflows/
     ├── 00-error-handler.json             ← Fl.0: Error handler global
     ├── 01-alertas-infraestructura-mantisbt.json  ← Fl.1: Alertas → MantisBT
-    └── 02-verificacion-backups.json      ← Fl.2: Verificación de backups diaria
+    ├── 02-verificacion-backups.json      ← Fl.2: Verificación de backups diaria
+    └── 03-informe-ejecutivo-gemini.json  ← Fl.3: Informe ejecutivo con Gemini
 ```

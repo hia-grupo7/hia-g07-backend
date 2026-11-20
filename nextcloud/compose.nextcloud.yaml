@@ -39,7 +39,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/nc_db_password
       NEXTCLOUD_ADMIN_USER: ${NC_ADMIN_USER}
       NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nc_admin_password
-      NEXTCLOUD_TRUSTED_DOMAINS: localhost
+      NEXTCLOUD_TRUSTED_DOMAINS: localhost nextcloud
     secrets:
       - nc_db_password
       - nc_admin_password
@@ -71,6 +71,6 @@ networks:
 
 secrets:
   nc_db_password:
-    file: ./secrets/nc_db_password.txt
+    file: ../secrets/nc_db_password.txt
   nc_admin_password:
-    file: ./secrets/nc_admin_password.txt
+    file: ../secrets/nc_admin_password.txt

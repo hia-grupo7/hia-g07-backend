@@ -1,0 +1,437 @@
+{
+  "updatedAt": "2026-11-19T20:00:00.000Z",
+  "createdAt": "2026-11-19T20:00:00.000Z",
+  "id": "fl3informeejecutivogemini01",
+  "name": "N8N-02 Fl.3 - Informe Ejecutivo Asistido por IA (Gemini 2.5 Flash)",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "id": "n8n-fl3-sched-001",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "n8n-fl3-http-metricas-001",
+      "name": "Obtener Metricas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://nginx-proxy:80/api/dashboard/metricas-cards",
+        "authentication": "none",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "n8n-fl3-http-ventas-001",
+      "name": "Obtener Ventas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://nginx-proxy:80/api/dashboard/ventas-mensuales",
+        "authentication": "none",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "n8n-fl3-http-top-001",
+      "name": "Obtener Top Libros",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1160,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://nginx-proxy:80/api/dashboard/top-libros",
+        "authentication": "none",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "n8n-fl3-http-errores-001",
+      "name": "Obtener Errores Pago",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1460,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://nginx-proxy:80/api/metrics",
+        "authentication": "none",
+        "sendBody": false,
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "id": "n8n-fl3-code-consolidar-001",
+      "name": "Consolidar Metricas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const itemsCards = $('Obtener Metricas').all();\nconst itemsVentas = $('Obtener Ventas').all();\nconst itemsTop = $('Obtener Top Libros').all();\nconst itemsErrores = $('Obtener Errores Pago').all();\n\nfunction firstJson(items) {\n  const item = Array.isArray(items) ? items[0] : null;\n  return (item && item.json) ? item.json : {};\n}\n\nconst metricasCards = firstJson(itemsCards);\nconst metricasVentas = firstJson(itemsVentas);\nconst metricasTop = firstJson(itemsTop);\nconst metricasErrores = firstJson(itemsErrores);\n\nfunction parseMetricasPagos(text) {\n  const resultado = { exitos: 0, fallos: 0, razonUltimoError: null };\n  const lines = String(text || '').split('\\n');\n  for (const line of lines) {\n    const m = line.match(/^rayuela_payment_failure_total(?:\\{.*\\})?\\s+([\\d.]+)/);\n    if (m) {\n      resultado.fallos = Number(m[1]);\n      const rm = line.match(/reason=\"([^\"]*)\"/);\n      resultado.razonUltimoError = rm ? rm[1] : null;\n    }\n    const m2 = line.match(/^rayuela_payment_success_total(?:\\{.*\\})?\\s+([\\d.]+)/);\n    if (m2) {\n      resultado.exitos = Number(m2[1]);\n    }\n  }\n  return resultado;\n}\n\nconst rawErrores = (metricasErrores && typeof metricasErrores === 'object' && metricasErrores.data !== undefined) ? metricasErrores.data : metricasErrores;\nconst metricasPagos = parseMetricasPagos(rawErrores);\nconst metricas = {\n  ingresos: metricasCards.ingresos || null,\n  reservasActivas: metricasCards.reservasActivas !== undefined ? metricasCards.reservasActivas : 0,\n  bajoStockCritico: metricasCards.bajoStockCritico !== undefined ? metricasCards.bajoStockCritico : 0,\n  ventasMensuales: Array.isArray(metricasVentas) ? metricasVentas : [],\n  topLibros: Array.isArray(metricasTop) ? metricasTop : [],\n  metricasPagos: metricasPagos,\n};\n\nconst prompt = [\n  'Sos el analista ejecutivo de la libreria online Rayuela.',\n  'Genera un informe ejecutivo formal en Markdown a partir de las siguientes metricas semanales:',\n  JSON.stringify(metricas),\n  'El informe debe contener: resumen ejecutivo, metricas de negocio (ventas e ingresos), metricas operativas (reservas activas y stock critico), metricas de pagos y conclusiones.',\n].join('\\n');\n\nconst fecha = new Date().toISOString().slice(0, 10);\nconst ncUser = (typeof process !== 'undefined' && process.env && process.env.NC_ADMIN_USER) || 'admin';\n\nreturn [{\n  json: {\n    prompt: prompt,\n    metrics: metricas,\n    informeFile: 'informe-' + fecha + '.md',\n    ncUser: ncUser,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "n8n-fl3-http-gemini-001",
+      "name": "Generar Informe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2060,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ role: \"user\", parts: [{ text: $json.prompt }] }] }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "gemini-api-key-id",
+          "name": "Gemini API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "n8n-fl3-code-parsear-001",
+      "name": "Parsear Informe",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2360,
+        300
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const data = $json || {};\nconst candidate = (data.candidates && data.candidates[0]) ? data.candidates[0] : null;\nconst parts = candidate && candidate.content ? candidate.content.parts : [];\nconst text = (parts && parts[0] && parts[0].text) ? parts[0].text : '';\nconst prev = $('Consolidar Metricas').all();\nconst prevItem = Array.isArray(prev) ? prev[0] : null;\nconst prevJson = (prevItem && prevItem.json) ? prevItem.json : {};\nreturn [{\n  json: {\n    informe: text,\n    ncUser: prevJson.ncUser,\n    informeFile: prevJson.informeFile,\n  },\n}];\n"
+      }
+    },
+    {
+      "id": "n8n-fl3-http-webdav-001",
+      "name": "Guardar Informe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        300
+      ],
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://nextcloud:80/remote.php/dav/files/{{ $json.ncUser }}/Informes_Ejecutivos/{{ $json.informeFile }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "body": "={{ $json.informe }}",
+        "options": {
+          "timeout": 60000
+        },
+        "contentType": "raw",
+        "rawContentType": "text/markdown"
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "nextcloud-webdav-id",
+          "name": "Nextcloud WebDAV"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "n8n-fl3-email-001",
+      "name": "Enviar Informe",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2960,
+        300
+      ],
+      "parameters": {
+        "fromEmail": "nachotty2@gmail.com",
+        "toEmail": "nachotty2@gmail.com",
+        "subject": "=\"Informe ejecutivo semanal Rayuela\"",
+        "emailFormat": "html",
+        "html": "=<div style=\"font-family: Arial, sans-serif; color: #333; max-width: 640px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;\">\n  <h2 style=\"color: #2c6fbb; margin-top: 0;\">Informe ejecutivo semanal - Rayuela</h2>\n  <p>El informe ejecutivo semanal fue generado por la IA (Gemini 3.8 Flash) a partir de las metricas del sistema.</p>\n  <pre style=\"background-color: #f9f9f9; padding: 12px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px;\">{{ $json.informe }}</pre>\n</div>",
+        "options": {}
+      },
+      "credentials": {
+        "smtp": {
+          "id": "Iub6j4NXSsCoqMlu",
+          "name": "SMTP Gmail Rayuela"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "n8n-fl3-code-error-001",
+      "name": "Registrar Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2960,
+        560
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const entries = Array.isArray(items) ? items : [items];\nfor (const item of entries) {\n  const data = item.json || {};\n  const err = data.error || data;\n  const nodeName = (data.node && data.node.name) || data.nodeName || data.node || 'desconocido';\n  console.error(JSON.stringify({\n    ts: new Date().toISOString(),\n    source: 'n8n-fl3-error-node',\n    workflow: $workflow.name,\n    executionId: $execution.id,\n    node: typeof nodeName === 'string' ? nodeName : JSON.stringify(nodeName),\n    message: err.message || String(err),\n    description: err.description || null,\n    stack: err.stack || null,\n  }, null, 2));\n}\nreturn [];\n"
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Obtener Metricas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Metricas": {
+      "main": [
+        [
+          {
+            "node": "Obtener Ventas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Ventas": {
+      "main": [
+        [
+          {
+            "node": "Obtener Top Libros",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Top Libros": {
+      "main": [
+        [
+          {
+            "node": "Obtener Errores Pago",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Obtener Errores Pago": {
+      "main": [
+        [
+          {
+            "node": "Consolidar Metricas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consolidar Metricas": {
+      "main": [
+        [
+          {
+            "node": "Generar Informe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generar Informe": {
+      "main": [
+        [
+          {
+            "node": "Parsear Informe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear Informe": {
+      "main": [
+        [
+          {
+            "node": "Guardar Informe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar Informe": {
+      "main": [
+        [
+          {
+            "node": "Enviar Informe",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar Informe": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Registrar Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar Error": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timezone": "America/Argentina/Jujuy",
+    "errorWorkflow": "ncCuil3GfmQzaetM"
+  }
+}
