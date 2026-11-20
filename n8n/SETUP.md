@@ -130,12 +130,14 @@ docker compose logs -f n8n
 El Fl.3 guarda el informe por WebDAV en el contenedor `nextcloud`, por lo que el stack de Nextcloud debe estar corriendo y compartir la red `integracion-net` con n8n:
 
 ```bash
-# OJO: --env-file debe ir ANTES de -f para que se resuelvan NC_DB_NAME / NC_DB_USER / NC_ADMIN_USER
+# --env-file debe ir ANTES de -f para tomar NC_DB_NAME / NC_DB_USER / NC_ADMIN_USER / NC_PORT del .env (si no están, se usan los valores por defecto)
 docker compose --env-file .env -f nextcloud/compose.nextcloud.yaml up -d
 docker compose --env-file .env -f nextcloud/compose.nextcloud.yaml ps
 ```
 
-> La red `integracion-net` la crea el stack de Nextcloud; el `compose.yaml` principal la declara `external: true` y n8n se une a ella. Levantá Nextcloud **antes** que el stack principal, o creala a mano con `docker network create integracion-net`.
+> Las contraseñas de Nextcloud (`secrets/nc_db_password` y `secrets/nc_admin_password`) las crea `node scripts/init-secrets.js`. Nextcloud queda en `http://localhost:8082` (variable `NC_PORT`; el 8081 es de Mantis).
+>
+> La red `integracion-net` la crea el stack principal (`compose.yaml`) y n8n se une a ella; el compose de Nextcloud la declara `external: true`. Por eso el stack principal puede levantarse solo, pero Nextcloud necesita la red: levantá primero el stack principal, o creala a mano con `docker network create integracion-net`.
 
 ---
 
@@ -351,7 +353,7 @@ n8n requiere completar el wizard inicial antes de aceptar llamadas a la API. Acc
 
 ### n8n no resuelve el host `nextcloud` (`getaddrinfo ENOTFOUND`)
 
-- n8n debe estar en `integracion-net`. Levantá Nextcloud primero y luego recreá n8n:
+- n8n y Nextcloud deben estar en `integracion-net`. Verificá que exista (`docker network ls`), levantá el stack de Nextcloud y luego recreá n8n:
   `docker compose up -d n8n`
 - Verificá: `docker network inspect integracion-net --format '{{range .Containers}}{{.Name}} {{end}}'`
 

@@ -49,8 +49,8 @@ Si el stack ya está levantado, alcanza con sumar Mantis sin tocar los demás co
 `docker compose --profile mantis up -d mantis-db mantis`. Todos comparten `rayuela-network` (n8n podrá llamar a la API de
 Mantis). Para el backend hace falta la imagen local: `docker build -t rayuela-backend:1.1.0 .`.
 
-Si el puerto 8081 está ocupado (por ejemplo, por Nextcloud), definir `MANTIS_PORT=8082` en `.env` y, para el script de carga,
-`MANTIS_URL=http://localhost:8082`.
+Si el puerto 8081 está ocupado por otro programa, definir `MANTIS_PORT=8083` en `.env` y, para el script de carga,
+`MANTIS_URL=http://localhost:8083`. (El 8082 no: lo usa Nextcloud por defecto, variable `NC_PORT`.)
 
 ### Instalación inicial (solo la primera vez, igual en los dos casos)
 

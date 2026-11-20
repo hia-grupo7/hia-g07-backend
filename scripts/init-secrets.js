@@ -15,8 +15,8 @@
  *   - NUNCA pisa un archivo que ya existe (se puede volver a ejecutar sin riesgo).
  *   - Si el .env tiene el valor de un secreto (por ejemplo DB_PASSWORD), se usa ese valor.
  *   - Las claves de terceros (Gemini, Mercado Pago, correo) quedan vacías: se piden al responsable.
- *   - Se niega a continuar si ya existe el volumen de Postgres (código 2) o el de Mantis sin poder recuperar sus
- *     claves (código 3), porque una clave nueva dejaría esos servicios sin acceso a su base.
+ *   - Se niega a continuar si ya existe el volumen de Postgres (código 2), el de Mantis (código 3) o el de la base de
+ *     Nextcloud (código 4) sin poder recuperar sus claves, porque una clave nueva dejaría esos servicios sin acceso.
  */
 'use strict';
 
@@ -39,8 +39,8 @@ Uso:
   Opciones: --dir <carpeta>  --env <archivo .env>  --ayuda
 
 Nunca pisa un archivo existente y toma el valor del .env si la variable está definida.
-Se niega a continuar (código 2) si existe el volumen de Postgres sin --valores-actuales, y (código 3) si existe el de
-Mantis y faltan sus claves.`;
+Se niega a continuar (código 2) si existe el volumen de Postgres sin --valores-actuales, y (código 3 y 4) si existe el
+de Mantis o el de la base de Nextcloud y faltan sus claves.`;
 
 // ---------------------------------------------------------------- Argumentos (una opción mal escrita no se ignora)
 function leerArgumentos(argv) {
@@ -81,6 +81,18 @@ function leerEnv(archivo, variable) {
   return '';
 }
 
+// Valor guardado por versiones anteriores en otra ruta (sin saltos de línea finales), o null si no hay.
+function valorLegado(s) {
+  for (const rel of s.legado || []) {
+    const ruta = path.join(RAIZ, rel);
+    if (estadoRuta(ruta) === 'archivo') {
+      const v = fs.readFileSync(ruta, 'utf8').trimEnd();
+      if (v) return { valor: v, origen: `valor existente en ${rel}` };
+    }
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------- Definición de los secretos
 // "anterior": contraseña que usaba el compose hasta ahora. Solo se usa con --valores-actuales, para quienes ya
 // tienen volúmenes creados; se eliminará de este script cuando el grupo rote las contraseñas.
@@ -94,6 +106,13 @@ const SECRETOS = [
   { nombre: 'mantis_db_password', vars: ['MANTIS_DB_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, mantis: true },
   { nombre: 'mantis_db_root_password', vars: ['MANTIS_DB_ROOT_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, mantis: true },
   { nombre: 'mantis_crypto_salt', vars: ['MANTIS_CRYPTO_SALT'], tipo: 'infra', anterior: '', largo: 64, mantis: true },
+  // Nextcloud (CARD-16): su compose vive aparte (nextcloud/compose.nextcloud.yaml) y lee estos mismos archivos.
+  // "legado": rutas (relativas a la raíz del repo) donde versiones anteriores guardaban el valor; si existen, se reutilizan.
+  // "volumen": base ya creada con esa contraseña; si existe y no se puede recuperar el valor, no se genera uno nuevo.
+  { nombre: 'nc_db_password', vars: ['NC_DB_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, volumen: 'rayuela-nextcloud_nextcloud_db_data',
+    legado: ['nextcloud/secrets/nc_db_password.txt', 'secrets/nc_db_password.txt'] },
+  { nombre: 'nc_admin_password', vars: ['NC_ADMIN_PASSWORD'], tipo: 'infra', anterior: '', largo: 24,
+    legado: ['nextcloud/secrets/nc_admin_password.txt', 'secrets/nc_admin_password.txt'] },
   { nombre: 'gemini_api_key', vars: ['GEMINI_API_KEY'], tipo: 'tercero' },
   { nombre: 'mercadopago_access_token', vars: ['MERCADOPAGO_ACCESS_TOKEN', 'ACCESS_TOKEN'], tipo: 'tercero' },
   { nombre: 'email_pass', vars: ['EMAIL_PASS'], tipo: 'tercero' },
@@ -131,6 +150,21 @@ Si se generaran al azar, Mantis dejaría de poder conectarse a su base. Recupera
     }
   }
 
+  // Protección 3: la base de Nextcloud ya creada guarda su contraseña; una nueva la dejaría inaccesible.
+  if (!o.nuevos) {
+    const faltan = SECRETOS.filter((s) => s.volumen && volumenExiste(s.volumen)
+      && estadoRuta(path.join(o.dir, s.nombre)) !== 'archivo' && !valorDelEnv(s) && !valorLegado(s)).map((s) => s.nombre);
+    if (faltan.length) {
+      err(`Ya existe el volumen de la base de Nextcloud y falta su contraseña, que no se puede reconstruir:
+  ${faltan.join(' ')}
+Si se generara al azar, Nextcloud dejaría de poder conectarse a su base. Recuperala con alguna de estas opciones:
+  - desde una copia cifrada:   node scripts/backup-secrets.js restaurar <archivo.enc>
+  - copiando el archivo que usabas (nextcloud/secrets/nc_db_password.txt) o definiendo NC_DB_PASSWORD en el .env
+  - si Nextcloud no tiene datos que conservar, forzá valores nuevos con --nuevos`);
+      return 4;
+    }
+  }
+
   const conContenido = SECRETOS.map((s) => path.join(o.dir, s.nombre))
     .filter((p) => estadoRuta(p) === 'carpeta' && fs.readdirSync(p).length > 0);
   if (conContenido.length) {
@@ -158,7 +192,9 @@ Revisalas y borralas a mano antes de volver a ejecutar el script.`);
     let valor = '';
     let origen;
     const delEnv = valorDelEnv(s);
+    const delLegado = valorLegado(s);
     if (delEnv) ({ valor, origen } = delEnv);
+    else if (delLegado) ({ valor, origen } = delLegado);
     else if (s.tipo === 'tercero') { origen = 'vacío: falta la clave real'; vacios.push(s.nombre); }
     else if (o.actuales && s.anterior) { valor = s.anterior; origen = 'valor anterior del compose'; }
     else { valor = generar(s.largo); origen = 'generado al azar'; }
@@ -182,7 +218,9 @@ Accesos locales (las contraseñas están en los archivos de secrets/):
   pgAdmin  http://localhost:5050   correo: admin@rayuela.com   clave: secrets/pgadmin_password
   Postgres usuario: postgres       clave: secrets/db_password
 
-Siguiente paso:  docker compose --profile blue up -d`);
+Siguiente paso:  docker compose --profile blue up -d
+Nextcloud (opcional, necesita el paso anterior porque la red integracion-net la crea el stack principal):
+  docker compose --env-file .env -f nextcloud/compose.nextcloud.yaml up -d   (usuario: valor de NC_ADMIN_USER, clave: secrets/nc_admin_password)`);
   return 0;
 }
 
