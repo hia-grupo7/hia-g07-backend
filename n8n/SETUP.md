@@ -243,6 +243,27 @@ Grafana alerta  →  Webhook (Basic Auth)  →  Enriquecer Alerta
                                               └─ Error: Registrar Error
 ```
 
+**Quién envía las alertas (reglas de Grafana):** Grafana evalúa cada 10 s las reglas de
+`monitoring/grafana/provisioning/alerting/reglas-infraestructura.yml` contra Prometheus: `PatroniNodoCaido`,
+`PatroniSinLider`, `BackendDown`, `PrometheusTargetMissing` (cualquier otro servicio monitoreado) y
+`PostgresReplicacionConRetraso`. Al dispararse, la política de notificación las manda por el contact point `n8n`, que es el
+webhook de este flujo (el contact point y la política los crea `bootstrap_fl1.py`):
+
+```
+Prometheus (métricas)  →  regla de Grafana  →  contact point n8n  →  /webhook/grafana-alerta  →  Fl.1  →  ticket + correo
+```
+
+- Las reglas se cargan al arrancar Grafana: `docker restart rayuela-grafana`. **Un archivo de reglas inválido impide que
+  Grafana arranque** (queda reiniciándose): se ve en `docker logs rayuela-grafana`. El intervalo del grupo tiene que ser
+  múltiplo de 10 s.
+- Una caída abre un solo ticket: `PrometheusTargetMissing` excluye a `patroni` y al backend, que ya tienen su regla propia.
+- Tiempo medido: con `docker stop rayuela-patroni1` el ticket aparece unos 80 s después (evaluación de 10 s, `for: 30s` de
+  la regla y 30 s de espera de agrupación de la política).
+- Los avisos de "resuelta" llegan al flujo, pero este los ignora: solo limpia su registro y **no cierra el ticket** (se cierra
+  a mano en MantisBT).
+- Las reglas de `monitoring/prometheus/rules.yml` siguen existiendo (se ven en Prometheus), pero Prometheus no notifica
+  a nadie: el aviso sale solo de Grafana.
+
 **Deduplicación:** Usa `staticData` global con TTL de 6 horas para evitar crear tickets duplicados por la misma alerta.
 
 **Mapeo de severidad Grafana → MantisBT:**

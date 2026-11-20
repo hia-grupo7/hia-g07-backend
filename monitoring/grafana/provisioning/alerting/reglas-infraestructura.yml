@@ -1,0 +1,128 @@
+# Reglas de alerta de Grafana (OBS-02). Grafana las evalua contra Prometheus y, cuando una se dispara, las envia por el
+# contact point "n8n" (webhook a n8n) segun la politica de notificacion. El flujo N8N-01 Fl.1 recibe el aviso, abre el
+# ticket en MantisBT y notifica por correo. El contact point y la politica los crea n8n/scripts/bootstrap_fl1.py.
+# Se cargan al arrancar Grafana (docker restart rayuela-grafana). Cada regla tiene tres pasos:
+#   A = consulta a Prometheus, B = ultimo valor de A, C = umbral que decide si la alerta se dispara.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: infraestructura
+    folder: Rayuela
+    interval: 10s
+    rules:
+      # Un nodo de la base de datos (Patroni) no responde. Una alerta por nodo (labels instance y nodo).
+      - uid: regla-patroni-nodo-caido
+        title: PatroniNodoCaido
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-rayuela
+            model: { refId: A, expr: 'up{job="patroni"}', instant: true, range: false, intervalMs: 1000, maxDataPoints: 43200 }
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last, settings: { mode: dropNN } }
+          - refId: C
+            datasourceUid: __expr__
+            model: { refId: C, type: threshold, expression: B, conditions: [{ evaluator: { type: lt, params: [1] } }] }
+        for: 30s
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: 'Nodo {{ $labels.nodo }} del cluster de base de datos caido'
+          description: 'Patroni no responde en {{ $labels.nodo }}. Si era el lider, la replica se promueve sola en ~30 s.'
+
+      # Ningun nodo se reporta como primario: las escrituras estan detenidas. Sin datos (ambos nodos caidos) tambien alerta.
+      - uid: regla-patroni-sin-lider
+        title: PatroniSinLider
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-rayuela
+            model: { refId: A, expr: 'sum(patroni_primary)', instant: true, range: false, intervalMs: 1000, maxDataPoints: 43200 }
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last, settings: { mode: dropNN } }
+          - refId: C
+            datasourceUid: __expr__
+            model: { refId: C, type: threshold, expression: B, conditions: [{ evaluator: { type: lt, params: [1] } }] }
+        for: 30s
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: 'El cluster de base de datos no tiene lider'
+          description: 'Ningun nodo se reporta como primario: las escrituras estan detenidas hasta que Patroni elija un lider.'
+
+      # El backend no responde al scrape de /api/metrics.
+      - uid: regla-backend-caido
+        title: BackendDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-rayuela
+            model: { refId: A, expr: 'up{job="rayuela-backend"}', instant: true, range: false, intervalMs: 1000, maxDataPoints: 43200 }
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last, settings: { mode: dropNN } }
+          - refId: C
+            datasourceUid: __expr__
+            model: { refId: C, type: threshold, expression: B, conditions: [{ evaluator: { type: lt, params: [1] } }] }
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: 'Backend Rayuela sin responder'
+          description: 'El backend en {{ $labels.instance }} no responde al scrape de /api/metrics.'
+
+      # Cualquier otro servicio monitoreado (cAdvisor, node-exporter, exportadores de Postgres, Prometheus) deja de responder.
+      # Excluye patroni y el backend, que ya tienen su regla propia (asi una caida no abre dos tickets).
+      - uid: regla-servicio-monitoreo-caido
+        title: PrometheusTargetMissing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-rayuela
+            model: { refId: A, expr: 'up{job!~"patroni|rayuela-backend"}', instant: true, range: false, intervalMs: 1000, maxDataPoints: 43200 }
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last, settings: { mode: dropNN } }
+          - refId: C
+            datasourceUid: __expr__
+            model: { refId: C, type: threshold, expression: B, conditions: [{ evaluator: { type: lt, params: [1] } }] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: critical }
+        annotations:
+          summary: 'Scrapeo fallido en job {{ $labels.job }}'
+          description: 'El job {{ $labels.job }} en la instancia {{ $labels.instance }} no esta respondiendo metricas.'
+
+      # La replica va atrasada respecto del lider.
+      - uid: regla-postgres-replicacion-retraso
+        title: PostgresReplicacionConRetraso
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus-rayuela
+            model: { refId: A, expr: 'max(pg_replication_lag_seconds)', instant: true, range: false, intervalMs: 1000, maxDataPoints: 43200 }
+          - refId: B
+            datasourceUid: __expr__
+            model: { refId: B, type: reduce, expression: A, reducer: last, settings: { mode: dropNN } }
+          - refId: C
+            datasourceUid: __expr__
+            model: { refId: C, type: threshold, expression: B, conditions: [{ evaluator: { type: gt, params: [10] } }] }
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels: { severity: warning }
+        annotations:
+          summary: 'Retraso de replicacion de {{ $values.B }} s'
+          description: 'La replica va atrasada respecto del lider: si el lider cae ahora podria perderse trabajo.'
