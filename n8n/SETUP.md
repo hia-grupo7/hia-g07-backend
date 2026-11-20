@@ -16,7 +16,7 @@ Este módulo contiene los flujos de automatización de n8n para el proyecto **Ra
 | `00-error-handler.json` | N8N-00 Registro de Errores | Error interno | Workflow de error global que loguea fallos de cualquier otro workflow |
 | `01-alertas-infraestructura-mantisbt.json` | N8N-01 Fl.1 — Alertas de Infraestructura | Webhook (POST desde Grafana) | Recibe alertas de Grafana, crea ticket en MantisBT y notifica por email |
 | `02-verificacion-backups.json` | N8N-01 Fl.2 — Verificación de Backups | Schedule (04:00 AM diario) | Verifica integridad del backup más reciente de PostgreSQL y notifica por email si falla |
-| `03-informe-ejecutivo-gemini.json` | N8N-02 Fl.3 — Informe Ejecutivo Asistido por IA (Gemini 3.8 Flash) | Schedule (lunes 09:00) | Genera informe ejecutivo semanal con métricas del backend + análisis Gemini → guarda en Nextcloud (`/Informes_Ejecutivos`) y notifica por email |
+| `03-informe-ejecutivo-gemini.json` | N8N-02 Fl.3 — Informe Ejecutivo Asistido por IA (Gemini 3.5 Flash Lite) | Schedule (lunes 09:00) | Genera informe ejecutivo semanal con métricas del backend + análisis Gemini → guarda en Nextcloud (`/Informes_Ejecutivos`) y notifica por email |
 | `03-honeypot-intrusion-mantisbt.json` | SEC-02 Honeypot — Intento de intrusión | Webhook (POST desde el backend, cabecera `X-Honeypot-Token`) | Recibe el aviso del endpoint trampa `/api/admin/reset-all` y crea un incidente de seguridad en MantisBT. Se carga con `python3 n8n/scripts/bootstrap_honeypot.py` |
 
 ---
@@ -202,7 +202,7 @@ El bootstrap crea/actualiza el Fl.3 igual que Fl.1 y Fl.2, pero **no** prepara N
    ```
 6. **Probar**: ejecutar el workflow desde la UI y verificar que aparezca `informe-YYYY-MM-DD.md` en `/Informes_Ejecutivos`.
 
-> **Modelo Gemini:** el workflow usa `gemini-3.8-flash` (fijado en el JSON). `gemini-2.5-flash` ya no está disponible para cuentas nuevas y la API responde `404`.
+> **Modelo Gemini:** el workflow usa `gemini-3.5-flash-lite` (fijado en el JSON), que responde en unos 2 s. `gemini-2.5-flash` ya no está disponible para cuentas nuevas (la API responde `404`) y `gemini-3.8-flash` dio timeouts de más de 120 s el 2026-11-20.
 
 ---
 
@@ -242,6 +242,27 @@ Grafana alerta  →  Webhook (Basic Auth)  →  Enriquecer Alerta
                                               ├─ OK: Crear Ticket MantisBT  →  Registrar Ticket  →  Notificar Incidente (email)
                                               └─ Error: Registrar Error
 ```
+
+**Quién envía las alertas (reglas de Grafana):** Grafana evalúa cada 10 s las reglas de
+`monitoring/grafana/provisioning/alerting/reglas-infraestructura.yml` contra Prometheus: `PatroniNodoCaido`,
+`PatroniSinLider`, `BackendDown`, `PrometheusTargetMissing` (cualquier otro servicio monitoreado) y
+`PostgresReplicacionConRetraso`. Al dispararse, la política de notificación las manda por el contact point `n8n`, que es el
+webhook de este flujo (el contact point y la política los crea `bootstrap_fl1.py`):
+
+```
+Prometheus (métricas)  →  regla de Grafana  →  contact point n8n  →  /webhook/grafana-alerta  →  Fl.1  →  ticket + correo
+```
+
+- Las reglas se cargan al arrancar Grafana: `docker restart rayuela-grafana`. **Un archivo de reglas inválido impide que
+  Grafana arranque** (queda reiniciándose): se ve en `docker logs rayuela-grafana`. El intervalo del grupo tiene que ser
+  múltiplo de 10 s.
+- Una caída abre un solo ticket: `PrometheusTargetMissing` excluye a `patroni` y al backend, que ya tienen su regla propia.
+- Tiempo medido: con `docker stop rayuela-patroni1` el ticket aparece unos 80 s después (evaluación de 10 s, `for: 30s` de
+  la regla y 30 s de espera de agrupación de la política).
+- Los avisos de "resuelta" llegan al flujo, pero este los ignora: solo limpia su registro y **no cierra el ticket** (se cierra
+  a mano en MantisBT).
+- Las reglas de `monitoring/prometheus/rules.yml` siguen existiendo (se ven en Prometheus), pero Prometheus no notifica
+  a nadie: el aviso sale solo de Grafana.
 
 **Deduplicación:** Usa `staticData` global con TTL de 6 horas para evitar crear tickets duplicados por la misma alerta.
 
@@ -288,14 +309,14 @@ Schedule (04:00)  →  Validar Backup (Code)  →  Registrar Resultado
 
 ```
 Schedule (Lun 09:00)  →  Obtener Metricas (backend /api/dashboard + /api/metrics)
-                                        →  Consolidar Metricas  →  Generar Informe (Gemini 3.8 Flash)
+                                        →  Consolidar Metricas  →  Generar Informe (Gemini 3.5 Flash Lite)
                                         →  Parsear Informe  →  Guardar Informe (Nextcloud WebDAV)
                                                                                 →  Enviar Informe (email)
 ```
 
 **Qué hace:**
 1. Consulta métricas al backend (`/api/dashboard/metricas-cards`, `/api/dashboard/ventas-mensuales`, `/api/dashboard/top-libros`) y a `/api/metrics` (errores de pagos).
-2. Arma el payload de métricas y construye el prompt para Gemini 3.8 Flash (2.5 Flash fue discontinuado para cuentas nuevas).
+2. Arma el payload de métricas y construye el prompt para Gemini 3.5 Flash Lite (2.5 Flash fue discontinuado para cuentas nuevas).
 3. Gemini genera el informe ejecutivo en Markdown.
 4. n8n guarda el informe en Nextcloud (`/remote.php/dav/files/<user>/Informes_Ejecutivos/informe-YYYY-MM-DD.md`).
 5. Envía el informe por email (SMTP Gmail Rayuela).
@@ -365,7 +386,7 @@ n8n requiere completar el wizard inicial antes de aceptar llamadas a la API. Acc
 
 ### Gemini responde 404 / 400 en el Fl.3
 
-- `404 ... model ... no longer available` → el modelo cambió; usá `gemini-3.8-flash` (ya configurado en el JSON).
+- `404 ... model ... no longer available` → el modelo cambió; usá `gemini-3.5-flash-lite` (ya configurado en el JSON).
 - `400/403` → `GEMINI_API_KEY` inválida o sin permisos; regenerala y volvé a correr el bootstrap.
 
 ### El email del Fl.3 llega sin el informe

@@ -56,10 +56,30 @@ secrets:
     file: ./secrets/email_pass
   honeypot_webhook_token:
     file: ./secrets/honeypot_webhook_token
+  # Alta disponibilidad (CARD-08): usuario de monitoreo creado automaticamente en el primer arranque del cluster.
+  monitor_password:
+    file: ./secrets/monitor_password
+  # Diagnostico con IA (n8n + Qdrant): clave de Qdrant y token del webhook que recibe las fallas.
+  qdrant_api_key:
+    file: ./secrets/qdrant_api_key
+  diagnostico_webhook_token:
+    file: ./secrets/diagnostico_webhook_token
 
 volumes:
-  postgres_data:
-    name: rayuela_postgres_data
+  # El volumen "rayuela_postgres_data" del PostgreSQL de un solo nodo ya no se usa (queda en Docker sin tocar,
+  # por si hay que volver atras con "git checkout dev"). El cluster nuevo usa sus propios volumenes.
+  patroni1_data:
+    name: rayuela_patroni1_data
+  patroni2_data:
+    name: rayuela_patroni2_data
+  etcd1_data:
+    name: rayuela_etcd1_data
+  etcd2_data:
+    name: rayuela_etcd2_data
+  etcd3_data:
+    name: rayuela_etcd3_data
+  qdrant_data:
+    name: rayuela_qdrant_data
   pgadmin_data:
     name: rayuela_pgadmin_data
   prometheus_data:
@@ -77,41 +97,206 @@ volumes:
 
 services:
 
+  # ---------------------------------------------------------------------------
+  # BASE VECTORIAL — Qdrant (diagnostico con IA)
+  # Guarda el manual operativo (docs/manual-operativo) como vectores para que el agente de n8n lo consulte (RAG).
+  # Es un dato derivado: si se pierde, se reconstruye ejecutando el flujo "IA-01 Carga del manual en Qdrant".
+  # No se publica al equipo; exige una clave de API (secreto qdrant_api_key) que se pasa con un envoltorio de
+  # arranque, igual que PgBouncer, para que no aparezca en "docker inspect".
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    container_name: rayuela-qdrant
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export QDRANT__SERVICE__API_KEY="$$(cat /run/secrets/qdrant_api_key)" && exec ./entrypoint.sh
+    volumes:
+      - qdrant_data:/qdrant/storage
+    secrets:
+      - qdrant_api_key
+    networks:
+      - rayuela-network
+    expose:
+      - "6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
   # ===========================================================================
   # CAPA DE DATOS
   # ===========================================================================
 
-  postgres-primary:
-    image: postgres:16-alpine
-    container_name: rayuela-db-primary
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /run/postgresql
-      - /tmp
+  # ---------------------------------------------------------------------------
+  # ALTA DISPONIBILIDAD DE LA BASE — Patroni (2 nodos) + etcd (3) + HAProxy — CARD-08
+  #   Failover automatico: si cae el lider, la replica se promueve sola (~30 s) y el nodo caido vuelve como replica.
+  #   Modo sincronico (no estricto): no se pierden escrituras confirmadas.
+  #   Estado del cluster:   docker exec rayuela-patroni1 patronictl list
+  #   Panel de HAProxy:     http://127.0.0.1:7000
+  #   Detalle y pruebas:    ha/README.md
+  # La base NO se publica al host: toda la aplicacion entra por HAProxy (5000 escritura / 5001 lectura).
+  # ---------------------------------------------------------------------------
+
+  # etcd: arbitro del cluster (guarda "quien es el lider"). 3 miembros = tolera la caida de 1.
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: rayuela-etcd1
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_NAME:-postgres}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-      PGDATA: /var/lib/postgresql/data/pgdata
+    command: >
+      etcd --name etcd1 --data-dir /etcd-data
+      --initial-advertise-peer-urls http://etcd1:2380
+      --listen-peer-urls http://0.0.0.0:2380
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd1:2379
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token rayuela-etcd-token
+      --initial-cluster-state new
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    secrets:
-      - db_password
+      - etcd1_data:/etcd-data
     networks:
       - rayuela-network
-    # Seguridad CARD-15: La base de datos es 100% privada dentro de rayuela-network.
-    # No se publican puertos al host para garantizar que PostgreSQL no sea accesible desde el exterior.
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: rayuela-etcd2
+    restart: unless-stopped
+    command: >
+      etcd --name etcd2 --data-dir /etcd-data
+      --initial-advertise-peer-urls http://etcd2:2380
+      --listen-peer-urls http://0.0.0.0:2380
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd2:2379
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token rayuela-etcd-token
+      --initial-cluster-state new
+    volumes:
+      - etcd2_data:/etcd-data
+    networks:
+      - rayuela-network
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.9
+    container_name: rayuela-etcd3
+    restart: unless-stopped
+    command: >
+      etcd --name etcd3 --data-dir /etcd-data
+      --initial-advertise-peer-urls http://etcd3:2380
+      --listen-peer-urls http://0.0.0.0:2380
+      --listen-client-urls http://0.0.0.0:2379
+      --advertise-client-urls http://etcd3:2379
+      --initial-cluster etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      --initial-cluster-token rayuela-etcd-token
+      --initial-cluster-state new
+    volumes:
+      - etcd3_data:/etcd-data
+    networks:
+      - rayuela-network
+
+  # Nodos PostgreSQL 16 + Patroni (imagen Spilo de Zalando). Los dos son iguales: el que gana la eleccion es el lider.
+  # Los usuarios y claves se crean solos en el primer arranque desde los Docker Secrets (ver ha/patroni-entrypoint.sh).
+  patroni1:
+    image: ghcr.io/zalando/spilo-16:3.3-p3
+    container_name: rayuela-patroni1
+    hostname: patroni1
+    restart: unless-stopped
+    # Con bases grandes el checkpoint de apagado tarda mas de los 10 s que Docker da por defecto: sin esto lo mata
+    # (SIGKILL) a medio apagar y el nodo, al volver, necesita pg_rewind y WAL que el otro nodo ya pudo borrar.
+    stop_grace_period: 60s
+    shm_size: 256mb
+    entrypoint: ["/bin/sh", "/hook/patroni-entrypoint.sh"]
+    environment:
+      SCOPE: rayuela-cluster
+      PATRONI_NAME: patroni1
+      ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+      DB_NAME: ${DB_NAME:-rayuela}
+    volumes:
+      - patroni1_data:/home/postgres/pgdata
+      - ./ha/patroni-entrypoint.sh:/hook/patroni-entrypoint.sh:ro
+      - ./ha/patroni-post-init.sh:/hook/patroni-post-init.sh:ro
+    secrets:
+      - db_password
+      - replicator_password
+      - monitor_password
+    networks:
+      - rayuela-network
     expose:
       - "5432"
+      - "8008"
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-postgres}"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 20s
+      retries: 10
+      start_period: 40s
+
+  patroni2:
+    image: ghcr.io/zalando/spilo-16:3.3-p3
+    container_name: rayuela-patroni2
+    hostname: patroni2
+    restart: unless-stopped
+    stop_grace_period: 60s
+    shm_size: 256mb
+    entrypoint: ["/bin/sh", "/hook/patroni-entrypoint.sh"]
+    environment:
+      SCOPE: rayuela-cluster
+      PATRONI_NAME: patroni2
+      ETCD3_HOSTS: etcd1:2379,etcd2:2379,etcd3:2379
+      DB_NAME: ${DB_NAME:-rayuela}
+    volumes:
+      - patroni2_data:/home/postgres/pgdata
+      - ./ha/patroni-entrypoint.sh:/hook/patroni-entrypoint.sh:ro
+      - ./ha/patroni-post-init.sh:/hook/patroni-post-init.sh:ro
+    secrets:
+      - db_password
+      - replicator_password
+      - monitor_password
+    networks:
+      - rayuela-network
+    expose:
+      - "5432"
+      - "8008"
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8008/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # Punto de entrada unico a la base. Healthy cuando existe un lider al que escribir.
+  haproxy:
+    image: haproxy:alpine
+    container_name: rayuela-haproxy
+    restart: unless-stopped
+    volumes:
+      - ./ha/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    # Solo el panel de estado, y solo desde este equipo. 5000 y 5001 son internos.
+    ports:
+      - "127.0.0.1:7000:7000"
+    networks:
+      - rayuela-network
+    depends_on:
+      - patroni1
+      - patroni2
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- 'http://127.0.0.1:7000/;csv' | grep -E '^primary,patroni[0-9],' | grep -q ',UP,'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 15s
 
   # ---------------------------------------------------------------------------
   # SERVICIO DE BACKUP AUTOMATIZADO — CARD-05
@@ -127,7 +312,9 @@ services:
       - no-new-privileges:true
     restart: unless-stopped
     environment:
-      DB_NAME: ${DB_NAME:-postgres}
+      DB_HOST: haproxy
+      DB_PORT: 5000
+      DB_NAME: ${DB_NAME:-rayuela}
       DB_USER: ${DB_USER:-postgres}
       TZ: America/Argentina/Jujuy
     volumes:
@@ -137,41 +324,8 @@ services:
     networks:
       - rayuela-network
     depends_on:
-      postgres-primary:
+      haproxy:
         condition: service_healthy
-
-  # ---------------------------------------------------------------------------
-  # NODO RÉPLICA (Hot Standby / Solo Lectura) — CARD-08
-  # ---------------------------------------------------------------------------
-  postgres-replica:
-    image: postgres:16-alpine
-    container_name: rayuela-db-replica
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
-    tmpfs:
-      - /run/postgresql
-      - /tmp
-    restart: unless-stopped
-    secrets:
-      - replicator_password
-    networks:
-      - rayuela-network
-    ports:
-      - "5433:5432"
-    depends_on:
-      postgres-primary:
-        condition: service_healthy
-    command: >
-      sh -c "
-      rm -rf /var/lib/postgresql/data/* &&
-      until PGPASSWORD=$$(cat /run/secrets/replicator_password) pg_basebackup -h postgres-primary -U replicator -D /var/lib/postgresql/data -P -Xs -R --checkpoint=fast; do
-        echo 'Esperando al nodo primario para clonar catálogo...'; sleep 3;
-      done &&
-      chown -R postgres:postgres /var/lib/postgresql/data &&
-      chmod 0700 /var/lib/postgresql/data &&
-      exec su-exec postgres postgres -c hot_standby=on
-      "
 
   # ---------------------------------------------------------------------------
   # POOLER DE CONEXIONES — PgBouncer en puerto 6432 — CARD-08
@@ -198,8 +352,9 @@ services:
       - db_password
     environment:
       DB_USER: postgres
-      DB_HOST: postgres-primary
-      DB_NAME: ${DB_NAME:-postgres}
+      DB_HOST: haproxy
+      DB_PORT: 5000
+      DB_NAME: ${DB_NAME:-rayuela}
       AUTH_TYPE: scram-sha-256
       POOL_MODE: transaction
       MAX_CLIENT_CONN: 150
@@ -210,7 +365,7 @@ services:
     ports:
       - "6432:6432"
     depends_on:
-      postgres-primary:
+      haproxy:
         condition: service_healthy
         
   pgadmin:
@@ -234,7 +389,7 @@ services:
     ports:
       - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
     depends_on:
-      postgres-primary:
+      haproxy:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/misc/ping"]
@@ -266,11 +421,12 @@ services:
       EMAIL_USER: ${EMAIL_USER:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PORT: 3000
-      DB_HOST: postgres-primary
-      DB_PORT: 5432
-      DB_READ_HOST: postgres-primary
-      DB_READ_PORT: 5432
-      DB_NAME: ${DB_NAME:-postgres}
+      # Toda la base entra por HAProxy: 5000 = escritura (lider), 5001 = lectura (lider o replica).
+      DB_HOST: haproxy
+      DB_PORT: 5000
+      DB_READ_HOST: haproxy
+      DB_READ_PORT: 5001
+      DB_NAME: ${DB_NAME:-rayuela}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD_FILE: /run/secrets/db_password
       JWT_SECRET_FILE: /run/secrets/jwt_secret
@@ -295,7 +451,7 @@ services:
     expose:
       - "3000"
     depends_on:
-      postgres-primary:
+      haproxy:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
@@ -327,11 +483,12 @@ services:
       EMAIL_USER: ${EMAIL_USER:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PORT: 3000
-      DB_HOST: postgres-primary
-      DB_PORT: 5432
-      DB_READ_HOST: postgres-primary
-      DB_READ_PORT: 5432
-      DB_NAME: ${DB_NAME:-postgres}
+      # Toda la base entra por HAProxy: 5000 = escritura (lider), 5001 = lectura (lider o replica).
+      DB_HOST: haproxy
+      DB_PORT: 5000
+      DB_READ_HOST: haproxy
+      DB_READ_PORT: 5001
+      DB_NAME: ${DB_NAME:-rayuela}
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD_FILE: /run/secrets/db_password
       JWT_SECRET_FILE: /run/secrets/jwt_secret
@@ -356,7 +513,7 @@ services:
     expose:
       - "3000"
     depends_on:
-      postgres-primary:
+      haproxy:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
@@ -569,25 +726,46 @@ services:
     networks:
       - rayuela-network
 
-  postgres_exporter:
+  # Un exportador por nodo (cada uno ve su propio rol, retraso y estado de replicacion). Usuario "monitorizacion"
+  # (rol pg_monitor), creado solo en el primer arranque del cluster.
+  postgres_exporter1:
     image: prometheuscommunity/postgres-exporter:latest
-    container_name: rayuela-postgres-exporter
+    container_name: rayuela-postgres-exporter1
     security_opt:
       - no-new-privileges:true
     read_only: true
     restart: unless-stopped
     environment:
-      - DATA_SOURCE_URI=postgres-primary:5432/${DB_NAME:-postgres}?sslmode=disable
-      - DATA_SOURCE_USER=${DB_USER:-postgres}
-      - DATA_SOURCE_PASS_FILE=/run/secrets/db_password
+      - DATA_SOURCE_URI=patroni1:5432/${DB_NAME:-rayuela}?sslmode=disable
+      - DATA_SOURCE_USER=monitorizacion
+      - DATA_SOURCE_PASS_FILE=/run/secrets/monitor_password
     secrets:
-      - db_password
-    ports:
-      - "127.0.0.1:9187:9187"
+      - monitor_password
     networks:
       - rayuela-network
     depends_on:
-      postgres-primary:
+      patroni1:
+        condition: service_healthy
+
+  # Un exportador por nodo (cada uno ve su propio rol, retraso y estado de replicacion). Usuario "monitorizacion"
+  # (rol pg_monitor), creado solo en el primer arranque del cluster.
+  postgres_exporter2:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: rayuela-postgres-exporter2
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    restart: unless-stopped
+    environment:
+      - DATA_SOURCE_URI=patroni2:5432/${DB_NAME:-rayuela}?sslmode=disable
+      - DATA_SOURCE_USER=monitorizacion
+      - DATA_SOURCE_PASS_FILE=/run/secrets/monitor_password
+    secrets:
+      - monitor_password
+    networks:
+      - rayuela-network
+    depends_on:
+      patroni2:
         condition: service_healthy
 
   # ===========================================================================
@@ -621,6 +799,8 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - backups_data:/backups:ro
+      # Manual operativo para el asistente de diagnostico con IA: el flujo "IA-01" lo lee y lo carga en Qdrant.
+      - ./docs/manual-operativo:/manual:ro
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     networks:
@@ -632,6 +812,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+
 
   # ===========================================================================
   # GESTIÓN DE INCIDENCIAS — MantisBT + MariaDB (CARD-19 / MAN-01)

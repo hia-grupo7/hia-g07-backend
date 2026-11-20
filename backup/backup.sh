@@ -16,7 +16,17 @@ RETENCION_DIAS=7
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Iniciando backup de ${DB_NAME}..."
 INICIO=$(date +%s)
 
-PGPASSWORD="${DB_PASSWORD}" pg_dump -h postgres-primary -U "${DB_USER}" -d "${DB_NAME}" | gzip > "${ARCHIVO}"
+# Con un pipe simple (pg_dump | gzip) el estado de salida es el de gzip: si pg_dump falla, igual se declaraba "Backup OK"
+# con un archivo vacio. Se guarda el estado de pg_dump aparte y se verifica.
+ESTADO="/tmp/pg_dump.estado"
+rm -f "${ESTADO}"
+{ PGPASSWORD="${DB_PASSWORD}" pg_dump -h "${DB_HOST:-haproxy}" -p "${DB_PORT:-5000}" -U "${DB_USER}" -d "${DB_NAME}"; echo $? > "${ESTADO}"; } | gzip > "${ARCHIVO}"
+CODIGO_DUMP="$(cat "${ESTADO}" 2>/dev/null)"
+if [ "${CODIGO_DUMP}" != "0" ]; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: pg_dump fallo (codigo ${CODIGO_DUMP:-desconocido}); no se genero un backup valido."
+  rm -f "${ARCHIVO}"
+  exit 1
+fi
 
 FIN=$(date +%s)
 TIEMPO=$((FIN - INICIO))

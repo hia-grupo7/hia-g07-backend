@@ -30,10 +30,10 @@ INICIO=$(date +%s)
 export PGPASSWORD="${DB_PASSWORD}"
 
 # Crear la base destino si no existe
-psql -h postgres-primary -U "${DB_USER}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='${DESTINO}'" | grep -q 1 \
-  || psql -h postgres-primary -U "${DB_USER}" -d postgres -c "CREATE DATABASE ${DESTINO}"
+psql -h "${DB_HOST:-haproxy}" -p "${DB_PORT:-5000}" -U "${DB_USER}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='${DESTINO}'" | grep -q 1 \
+  || psql -h "${DB_HOST:-haproxy}" -p "${DB_PORT:-5000}" -U "${DB_USER}" -d postgres -c "CREATE DATABASE \"${DESTINO}\" TEMPLATE template0"
 
-gunzip -c "${ARCHIVO}" | psql -h postgres-primary -U "${DB_USER}" -d "${DESTINO}" -v ON_ERROR_STOP=1 -q
+gunzip -c "${ARCHIVO}" | psql -h "${DB_HOST:-haproxy}" -p "${DB_PORT:-5000}" -U "${DB_USER}" -d "${DESTINO}" -v ON_ERROR_STOP=1 -q
 
 FIN=$(date +%s)
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Restauración OK en ${DESTINO} | Tiempo: $((FIN - INICIO))s"

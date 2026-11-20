@@ -1,0 +1,245 @@
+{
+  "name": "IA-01 Carga del manual en Qdrant",
+  "nodes": [
+    {
+      "id": "ia01-trigger",
+      "name": "Ejecutar carga del manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "ia01-borrar",
+      "name": "Vaciar colección (idempotente)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "DELETE",
+        "url": "http://qdrant:6333/collections/rayuela_manual",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Qdrant API Key Header"
+        }
+      }
+    },
+    {
+      "id": "ia01-leer",
+      "name": "Leer manual y dividir por escenario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "\n// Lee los .md del manual operativo (montado de solo lectura en /manual), los divide por escenario (\"## \")\n// y devuelve un item por fragmento, con metadatos para citar la fuente.\nconst fs = require('fs');\nconst DIR = '/manual';\nconst MAX = 1500;\nconst salida = [];\nfor (const archivo of fs.readdirSync(DIR).filter((f) => f.endsWith('.md')).sort()) {\n  const texto = fs.readFileSync(DIR + '/' + archivo, 'utf8').replace(/\\r/g, '');\n  const titulo = (texto.match(/^# (.+)$/m) || [null, archivo])[1];\n  for (const parte of texto.split(/^(?=## )/m)) {\n    const t = parte.trim();\n    if (t.length < 80) continue;\n    const seccion = (t.match(/^## (.+)$/m) || [null, 'Introducción'])[1];\n    const codigo = (seccion.match(/^([A-Z]{2,4}-\\d{2})\\b/) || [null, ''])[1];\n    // partir secciones largas por parrafos, repitiendo el encabezado en cada pieza para no perder el contexto\n    const bloques = t.split(/\\n{2,}/);\n    let actual = '';\n    const piezas = [];\n    for (const b of bloques) {\n      if ((actual + '\\n\\n' + b).length > MAX && actual) { piezas.push(actual); actual = ''; }\n      actual = actual ? actual + '\\n\\n' + b : b;\n    }\n    if (actual) piezas.push(actual);\n    piezas.forEach((pz, i) => {\n      const cuerpo = i === 0 ? pz : `## ${seccion} (continuación)\\n\\n${pz}`;\n      salida.push({ json: { text: `Manual: ${titulo}\\n${cuerpo}`, fuente: archivo, seccion, codigo } });\n    });\n  }\n}\nif (!salida.length) throw new Error('No se encontró ningún .md en /manual');\nreturn salida;\n"
+      }
+    },
+    {
+      "id": "ia01-qdrant",
+      "name": "Qdrant Vector Store",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1,
+      "position": [
+        780,
+        0
+      ],
+      "parameters": {
+        "mode": "insert",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "rayuela_manual",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "qdrantApi": {
+          "id": "",
+          "name": "Qdrant Rayuela"
+        }
+      }
+    },
+    {
+      "id": "ia01-emb",
+      "name": "Embeddings Google Gemini",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        700,
+        240
+      ],
+      "parameters": {
+        "modelName": "models/gemini-embedding-001"
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Gemini Rayuela"
+        }
+      }
+    },
+    {
+      "id": "ia01-loader",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        900,
+        240
+      ],
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.text }}",
+        "textSplittingMode": "custom",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "fuente",
+                "value": "={{ $json.fuente }}"
+              },
+              {
+                "name": "seccion",
+                "value": "={{ $json.seccion }}"
+              },
+              {
+                "name": "codigo",
+                "value": "={{ $json.codigo }}"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "ia01-split",
+      "name": "Recursive Character Text Splitter",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        900,
+        420
+      ],
+      "parameters": {
+        "chunkSize": 3000,
+        "chunkOverlap": 0
+      }
+    },
+    {
+      "id": "ia01-fin",
+      "name": "Resumen de la carga",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1080,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const n = items.length;\nconsole.log(JSON.stringify({ flujo: 'IA-01', fragmentos_cargados: n, coleccion: 'rayuela_manual' }));\nreturn [{ json: { fragmentos_cargados: n, coleccion: 'rayuela_manual' } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Ejecutar carga del manual": {
+      "main": [
+        [
+          {
+            "node": "Vaciar colección (idempotente)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vaciar colección (idempotente)": {
+      "main": [
+        [
+          {
+            "node": "Leer manual y dividir por escenario",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Leer manual y dividir por escenario": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Vector Store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings Google Gemini": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Qdrant Vector Store",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Store": {
+      "main": [
+        [
+          {
+            "node": "Resumen de la carga",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
