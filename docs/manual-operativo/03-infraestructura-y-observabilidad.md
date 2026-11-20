@@ -132,8 +132,19 @@ cualquiera con la URL accede a la aplicación y a `/api/metrics` y `/api/docs`: 
 PgBouncer (`rayuela-pgbouncer`, puerto 6432) agrupa conexiones hacia HAProxy:5000 en modo transacción, con hasta 150
 clientes y 25 conexiones al servidor. Síntoma: `no more connections allowed` o `pgbouncer cannot connect to server`.
 Revisar `docker logs --tail 50 rayuela-pgbouncer`. Si dice `server login failed`, la clave `db_password` no coincide
-(04, SEG-03); si no puede conectar al servidor, falta el líder (manual 01, DB-04). El backend no pasa por PgBouncer: usa HAProxy
-directamente.
+(04, SEG-03); si no puede conectar al servidor, falta el líder (manual 01, DB-04). El backend **escribe a través de PgBouncer** (`DB_HOST=pgbouncer`, `DB_PORT=6432`) y **lee directo de HAProxy** `:5001`: si
+PgBouncer cae, el backend no puede escribir (las lecturas siguen). Docker lo reinicia solo (`restart: unless-stopped`).
+
+Para ver el estado de los pools (hace falta la clave; sin ella falla con `no password supplied`):
+
+```bash
+docker exec -e PGPASSWORD="$(cat secrets/db_password)" rayuela-pgbouncer \
+  psql -h 127.0.0.1 -U postgres -p 6432 -d pgbouncer -c "SHOW POOLS;"
+```
+
+En la fila `rayuela`, `cl_waiting` mayor que 0 de forma sostenida indica saturación (más pedidos que conexiones reales).
+La fila `pgbouncer` es la propia consola. Otros comandos útiles: `SHOW STATS;`, `SHOW SERVERS;` (debe apuntar a
+`haproxy:5000`) y `SHOW CLIENTS;`.
 
 ## INF-11. Los contenedores no arrancan después de reiniciar el equipo o Docker
 

@@ -136,7 +136,9 @@ services:
   # ---------------------------------------------------------------------------
   # ALTA DISPONIBILIDAD DE LA BASE — Patroni (2 nodos) + etcd (3) + HAProxy — CARD-08
   #   Failover automatico: si cae el lider, la replica se promueve sola (~30 s) y el nodo caido vuelve como replica.
-  #   Modo sincronico (no estricto): no se pierden escrituras confirmadas.
+  #   Replicacion ASINCRONA (synchronous_mode: false): si el lider cae pueden perderse las ultimas escrituras que la
+  #   replica aun no recibio, y una lectura por la replica puede ir un instante atrasada (ver ha/README.md).
+  #   Escrituras de la app: backend -> PgBouncer:6432 -> HAProxy:5000 -> lider. Lecturas: backend -> HAProxy:5001.
   #   Estado del cluster:   docker exec rayuela-patroni1 patronictl list
   #   Panel de HAProxy:     http://127.0.0.1:7000
   #   Detalle y pruebas:    ha/README.md
@@ -421,9 +423,11 @@ services:
       EMAIL_USER: ${EMAIL_USER:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PORT: 3000
-      # Toda la base entra por HAProxy: 5000 = escritura (lider), 5001 = lectura (lider o replica).
-      DB_HOST: haproxy
-      DB_PORT: 5000
+      # Escritura: backend -> PgBouncer:6432 -> HAProxy:5000 -> lider (PgBouncer agrupa conexiones; HAProxy sigue al lider).
+      # Lectura: backend -> HAProxy:5001 -> lider o replica. La replica es asincronica: una lectura puede ir un instante
+      # atrasada respecto de una escritura recien confirmada (no se fuerza leer del lider).
+      DB_HOST: pgbouncer
+      DB_PORT: 6432
       DB_READ_HOST: haproxy
       DB_READ_PORT: 5001
       DB_NAME: ${DB_NAME:-rayuela}
@@ -453,6 +457,8 @@ services:
     depends_on:
       haproxy:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
       interval: 15s
@@ -483,9 +489,11 @@ services:
       EMAIL_USER: ${EMAIL_USER:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       PORT: 3000
-      # Toda la base entra por HAProxy: 5000 = escritura (lider), 5001 = lectura (lider o replica).
-      DB_HOST: haproxy
-      DB_PORT: 5000
+      # Escritura: backend -> PgBouncer:6432 -> HAProxy:5000 -> lider (PgBouncer agrupa conexiones; HAProxy sigue al lider).
+      # Lectura: backend -> HAProxy:5001 -> lider o replica. La replica es asincronica: una lectura puede ir un instante
+      # atrasada respecto de una escritura recien confirmada (no se fuerza leer del lider).
+      DB_HOST: pgbouncer
+      DB_PORT: 6432
       DB_READ_HOST: haproxy
       DB_READ_PORT: 5001
       DB_NAME: ${DB_NAME:-rayuela}
@@ -515,6 +523,8 @@ services:
     depends_on:
       haproxy:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
       interval: 15s

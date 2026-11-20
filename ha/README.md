@@ -6,12 +6,19 @@ Este diseño reemplaza el PostgreSQL de un solo nodo (más una réplica manual) 
 
 | Pieza | Contenedores | Función |
 |---|---|---|
-| PostgreSQL 16 + Patroni | `rayuela-patroni1`, `rayuela-patroni2` | Dos nodos idénticos: uno es **líder** (lee y escribe) y el otro **réplica sincrónica** |
+| PostgreSQL 16 + Patroni | `rayuela-patroni1`, `rayuela-patroni2` | Dos nodos idénticos: uno es **líder** (lee y escribe) y el otro **réplica asincrónica** |
 | etcd | `rayuela-etcd1/2/3` | Árbitro: guarda quién es el líder. Tolera la caída de uno |
 | HAProxy | `rayuela-haproxy` | Único punto de entrada: `:5000` escritura (siempre el líder), `:5001` lectura (líder o réplica). Panel en `http://127.0.0.1:7000` |
+| PgBouncer | `rayuela-pgbouncer` | Agrupa las conexiones de **escritura** del backend (`:6432`, modo transacción, hasta 150 clientes y 25 conexiones reales) y las reenvía a HAProxy `:5000`. Las lecturas no pasan por aquí |
 | Exportadores | `rayuela-postgres-exporter1/2` | Métricas de cada nodo para Prometheus (usuario `monitorizacion`) |
 
-La base **no se publica al equipo**. El backend, PgBouncer, el backup y pgAdmin entran por HAProxy.
+La base **no se publica al equipo**. Camino de la aplicación:
+
+- **Escrituras:** backend → PgBouncer `:6432` → HAProxy `:5000` → líder.
+- **Lecturas:** backend → HAProxy `:5001` → líder o réplica (reparto *round-robin*).
+
+El backup y pgAdmin entran directo por HAProxy. Como PgBouncer apunta a HAProxy `:5000` (no a un nodo fijo), sigue al líder
+si hay failover: se probó a mano el 2026-11-20 y PgBouncer siguió al nuevo líder sin intervención.
 La aplicación usa su propia base, **`rayuela`**, creada vacía en el primer arranque (la base `postgres` queda para Patroni).
 
 ## Qué se automatizó
@@ -27,8 +34,10 @@ Al levantar el compose por primera vez, **sin pasos manuales**:
   | `monitorizacion` | Exportadores de métricas (rol `pg_monitor`) | `secrets/monitor_password` |
 
 - La réplica se clona sola desde el líder.
-- El **modo sincrónico no estricto** queda configurado: una escritura confirmada ya está en la réplica; si cae la
-  réplica, el servicio sigue en modo asincrónico en vez de bloquearse.
+- La replicación es **asincrónica** (`synchronous_mode: false`): el líder confirma sin esperar a la réplica. Si el líder
+  cae, pueden perderse las últimas escrituras que la réplica aún no recibió (Patroni no promueve una réplica con más de
+  32 MB de atraso). Para volver al modo síncrono: `patronictl edit-config -s synchronous_mode=true --force`.
+- Las pruebas de failover de abajo se midieron en modo sincrónico (0 pérdidas); repetirlas en asincrónico antes de citarlas.
 - La base `rayuela` se crea desde `template0`, de modo que su volcado (`pg_dump`) se restaura limpio.
 
 Para agregar otro usuario automáticamente, añadir su `CREATE ROLE` en `ha/patroni-post-init.sh` leyendo la clave de un
@@ -70,7 +79,7 @@ curl -s http://127.0.0.1:7000/                    # panel de HAProxy (en el nave
 3. Esperar a que el otro nodo pase a **Leader** y HAProxy lo marque `UP` en `primary` (con `docker stop` ~4 s; con
    `docker kill` unos 25 a 30 s, hasta que vence el `ttl` de Patroni). Mientras tanto la aplicación sigue respondiendo
    las lecturas (las atiende la réplica) y las escrituras esperan.
-4. Volver a levantarlo: `docker start rayuela-patroniN`. Vuelve como réplica sincrónica y en unos 5 s queda en `streaming`
+4. Volver a levantarlo: `docker start rayuela-patroniN`. Vuelve como réplica y en unos 5 s queda en `streaming`
    con lag 0 (`patronictl list`). El historial de cambios de líder: `docker exec rayuela-patroni1 patronictl history`.
 
 Resultados medidos en esta máquina con una carga continua por la API (un login por medio segundo y una lectura del
@@ -152,6 +161,12 @@ Los datos escritos en el clúster nuevo no pasan al volumen viejo: hacer antes u
 - `scripts/rotate-secrets.js` todavía apunta al PostgreSQL de un solo nodo (busca `rayuela-db-primary`): **no sirve** para rotar
   `db_password` ni `replicator_password` con este clúster. Pendiente de adaptar; mientras tanto no usarlo para esos dos secretos.
 - `scripts/verify-cluster-replication.ps1` y `verify-db-persistence.ps1` nombran los contenedores anteriores.
+- **Réplica asincrónica:** una lectura por el `:5001` puede caer en la réplica y no ver todavía lo que se acaba de escribir
+  (retraso de replicación, normalmente muy pequeño). El backend no fuerza lecturas al líder (no hay `useMaster`), así que un
+  flujo de "crear y volver a leer enseguida" puede mostrar el dato viejo (ver la incidencia del `reload()` en
+  `docs/mantis/incidencias.json`).
+- **PgBouncer es ahora un punto único para las escrituras:** si cae, el backend no puede escribir (las lecturas siguen por
+  HAProxy). Tiene `restart: unless-stopped`, así que Docker lo levanta de nuevo.
 - **PgBouncer sigue publicando el puerto 6432 en todas las interfaces** (pendiente de cerrar a `127.0.0.1`).
 - El backup guarda los volcados en el mismo equipo y volumen que los datos (sin copia externa).
 - Si el `.env` de otra persona fija `DB_NAME=postgres`, el clúster usará esa base y la restauración de backups chocará con los objetos propios de Spilo: usar `DB_NAME=rayuela`.
