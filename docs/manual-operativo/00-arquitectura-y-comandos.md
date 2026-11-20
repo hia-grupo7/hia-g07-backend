@@ -47,7 +47,7 @@ La respuesta de `/api/health` incluye `baseDeDatos`: `conectada` o `desconectada
 
 ## Códigos de evento que genera el monitor de n8n
 
-El flujo "IA-03 Monitor de salud de la plataforma" revisa la plataforma cada 30 segundos y envía eventos con estos
+El flujo "IA-03 Monitor de salud de la plataforma" revisa la plataforma cada 60 segundos y envía eventos con estos
 códigos al flujo de diagnóstico. Cada código remite a una sección de este manual.
 
 | Código | Significado | Ver |

@@ -86,7 +86,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5678/healthz
 de la esquina superior derecha del flujo); falta una credencial (el nodo muestra un triángulo rojo; crear la credencial
 y asignarla); una ejecución falló (menú Executions > ver el nodo en rojo y su error). Los flujos son:
 `IA-01 Carga del manual en Qdrant` (manual), `IA-02 Diagnóstico de fallas con IA` (webhook) e
-`IA-03 Monitor de salud de la plataforma` (cada 30 segundos). Si se perdió la configuración, volver a importar con
+`IA-03 Monitor de salud de la plataforma` (cada 60 segundos). Si se perdió la configuración, volver a importar con
 `python3 n8n/scripts/bootstrap_ia.py`.
 
 ## INF-07. El asistente de diagnóstico no encuentra nada en el manual (Qdrant)

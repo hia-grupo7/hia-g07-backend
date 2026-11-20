@@ -15,7 +15,7 @@
         "httpMethod": "POST",
         "path": "diagnostico-falla",
         "authentication": "headerAuth",
-        "responseMode": "onReceived",
+        "responseMode": "lastNode",
         "options": {}
       },
       "credentials": {
@@ -107,7 +107,7 @@
         120
       ],
       "parameters": {
-        "modelName": "models/gemini-3.8-flash",
+        "modelName": "models/gemini-3.5-flash-lite",
         "options": {
           "temperature": 0.2
         }
@@ -362,6 +362,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "executionTimeout": 300
   }
 }

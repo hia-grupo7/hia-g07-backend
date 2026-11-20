@@ -3,7 +3,7 @@
   "nodes": [
     {
       "id": "ia03-trigger",
-      "name": "Cada 30 segundos",
+      "name": "Cada 60 segundos",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -15,7 +15,7 @@
           "interval": [
             {
               "field": "seconds",
-              "secondsInterval": 30
+              "secondsInterval": 60
             }
           ]
         }
@@ -55,7 +55,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
-          "timeout": 20000
+          "timeout": 40000
         }
       },
       "credentials": {
@@ -105,17 +105,6 @@
     }
   ],
   "connections": {
-    "Cada 30 segundos": {
-      "main": [
-        [
-          {
-            "node": "Revisar plataforma",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Revisar plataforma": {
       "main": [
         [
@@ -144,6 +133,17 @@
         [
           {
             "node": "Enviar aviso directo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cada 60 segundos": {
+      "main": [
+        [
+          {
+            "node": "Revisar plataforma",
             "type": "main",
             "index": 0
           }

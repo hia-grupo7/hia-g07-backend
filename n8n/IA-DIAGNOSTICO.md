@@ -4,7 +4,7 @@ Cuando algo se cae, el sistema avisa por correo a la persona de guardia **con el
 sugerida por IA** que sale del manual operativo del proyecto (`docs/manual-operativo/`).
 
 ```
- IA-03 Monitor de salud (cada 30 s)         IA-02 Diagnóstico con IA (webhook)
+ IA-03 Monitor de salud (cada 60 s)         IA-02 Diagnóstico con IA (webhook)
  ┌─────────────────────────────┐            ┌────────────────────────────────────────────────┐
  │ Patroni :8008, etcd, HAProxy│  evento    │ valida y oculta secretos → agente Gemini       │
  │ y /api/health del backend   ├───────────▶│   ├─ consulta el manual en Qdrant (RAG)         │──▶ correo
@@ -19,7 +19,12 @@ sugerida por IA** que sale del manual operativo del proyecto (`docs/manual-opera
 |---|---|---|
 | **IA-01 Carga del manual en Qdrant** | Manual (botón "Execute workflow") | Lee los `.md` de `docs/manual-operativo/`, los parte por escenario (63 fragmentos), calcula los vectores con Gemini y los guarda en Qdrant (colección `rayuela_manual`). Es idempotente: borra la colección antes de cargar |
 | **IA-02 Diagnóstico de fallas con IA (RAG)** | Webhook `POST /webhook/diagnostico-falla` con cabecera `X-Diagnostico-Token` | Valida y limpia el evento (oculta contraseñas, tokens y claves antes de enviarlo a la IA), el agente consulta el manual y arma el correo. Si la IA falla, manda el correo "sin IA" con los primeros pasos del manual. Los eventos de recuperación no usan IA |
-| **IA-03 Monitor de salud de la plataforma** | Cada 30 segundos | Revisa los dos nodos de Patroni, los tres etcd, HAProxy y `/api/health`. Solo avisa si algo cambia (falla nueva, cambio de líder, recuperación) y repite el aviso cada 15 minutos si la falla persiste |
+| **IA-03 Monitor de salud de la plataforma** | Cada 60 segundos | Revisa los dos nodos de Patroni, los tres etcd, HAProxy y `/api/health`. Solo avisa si algo cambia (falla nueva, cambio de líder, recuperación) y repite el aviso cada 15 minutos si la falla persiste |
+
+**Tiempos:** IA-03 espera hasta 40 s la respuesta de IA-02. Si Gemini está lento y IA-02 no termina en ese plazo, IA-03 manda
+el **aviso directo** (con los primeros pasos del manual) para que la alerta no se retrase; IA-02 sigue en segundo plano y,
+si termina, envía después el correo con el diagnóstico (en ese caso llegan dos correos). IA-02 se corta a los 300 s.
+El nodo de Gemini de n8n no tiene opción de timeout propia, por eso el límite se aplica en la llamada de IA-03.
 
 Códigos de evento que genera el monitor: `NODO_DB_CAIDO`, `LIDER_CAMBIO`, `SIN_LIDER`, `SIN_REPLICA`, `ETCD_DEGRADADO`,
 `ETCD_SIN_QUORUM`, `HAPROXY_SIN_PRIMARIO`, `HAPROXY_CAIDO`, `BACKEND_CAIDO`, `BACKEND_SIN_BASE_DE_DATOS` y
@@ -106,5 +111,5 @@ dependen de tu clave y del modelo. Tampoco se probó el envío por Gmail real ni
 usuario de n8n en `.env`); sí se probó la asignación de credenciales a los nodos. Primera prueba recomendada: ejecutar IA-01, enviar el
 ejemplo 2 y revisar que el correo cite las secciones correctas del manual (`DB-01`, `DB-02`, ...).
 
-Ajustes posibles: el modelo del agente (`models/gemini-3.8-flash`) se cambia en el nodo *Google Gemini Chat Model* si tu clave
+Ajustes posibles: el modelo del agente (`models/gemini-3.5-flash-lite`) se cambia en el nodo *Google Gemini Chat Model* si tu clave
 no lo tiene; si se cambia el modelo de embeddings hay que volver a ejecutar IA-01 (la colección se recrea con el tamaño nuevo).
