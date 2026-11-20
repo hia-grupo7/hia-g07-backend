@@ -60,7 +60,7 @@ EXPLAIN (ANALYZE, BUFFERS)
 SELECT v.id, v.total, v.estado, c.codigo AS cupon_aplicado
 FROM public.ventas v
 LEFT JOIN public.cupones c ON v."idCupon" = c.id
-WHERE v."idUsuario" = 1 AND v.estado = 'completada';
+WHERE v."idUsuario" = 1 AND v.estado = 'completado';
 
 -- -----------------------------------------------------------------------------
 -- CONSULTA 8: Búsqueda de eventos recientes para el dashboard de auditoría

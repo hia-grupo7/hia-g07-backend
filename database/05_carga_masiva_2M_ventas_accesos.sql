@@ -40,7 +40,7 @@ SELECT i,
        1 + (i % 6),
        CASE WHEN i % 10 = 0 THEN (SELECT min(id) FROM public.cupones WHERE codigo LIKE 'PRUEBA%') + (i % 20) END,
        (1 + (i % 3)) * (5000 + (i % 40) * 250),
-       CASE (i % 10) WHEN 0 THEN 'pendiente' WHEN 1 THEN 'cancelada' ELSE 'completada' END,
+       CASE (i % 10) WHEN 0 THEN 'pendiente' WHEN 1 THEN 'cancelada' ELSE 'completado' END,
        d.f, d.f
 FROM generate_series(1, :n) i
 CROSS JOIN LATERAL (SELECT NOW() - ((i % 730) || ' days')::interval - ((i % 1440) || ' minutes')::interval AS f) d;
