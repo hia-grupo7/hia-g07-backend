@@ -21,6 +21,11 @@ networks:
   rayuela-network:
     name: rayuela-network
     driver: bridge
+  # Red compartida con Nextcloud para el flujo N8N-02 (informe ejecutivo -> WebDAV)
+  # La red "integracion-net" es creada por el stack de Nextcloud (nextcloud/compose.nextcloud.yaml).
+  integracion-net:
+    name: integracion-net
+    external: true
 
 # Docker Secrets (CARD-20 / SEC-01): cada secreto es un archivo de ./secrets (ignorado por git).
 # Se crean con "node scripts/init-secrets.js" (el mismo comando en Windows, Linux y macOS).
@@ -619,6 +624,7 @@ services:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     networks:
       - rayuela-network
+      - integracion-net
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/ || exit 1"]
       interval: 10s

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bootstrap de N8N-01 Fl.1 y Fl.2.
+Bootstrap de N8N-01 Fl.1, Fl.2 y N8N-02 Fl.3.
 
 Uso:
     python3 n8n/scripts/bootstrap_fl1.py
@@ -42,6 +42,7 @@ DEFAULT_ENV_FILE = REPO_ROOT / ".env"
 DEFAULT_MAIN_WORKFLOW = REPO_ROOT / "n8n" / "workflows" / "01-alertas-infraestructura-mantisbt.json"
 DEFAULT_BACKUP_WORKFLOW = REPO_ROOT / "n8n" / "workflows" / "02-verificacion-backups.json"
 DEFAULT_ERROR_WORKFLOW = REPO_ROOT / "n8n" / "workflows" / "00-error-handler.json"
+DEFAULT_INFORME_WORKFLOW = REPO_ROOT / "n8n" / "workflows" / "03-informe-ejecutivo-gemini.json"
 DEFAULT_N8N_URL = "http://127.0.0.1:5678"
 DEFAULT_GRAFANA_URL = "http://127.0.0.1:3001"
 DEFAULT_INTERNAL_WEBHOOK_URL = "http://n8n:5678/webhook/grafana-alerta"
@@ -59,6 +60,8 @@ PLACEHOLDER_VALUES = {
 WEBHOOK_CREDENTIAL = "Grafana Webhook Basic Auth"
 MANTIS_CREDENTIAL = "MantisBT API Token"
 SMTP_CREDENTIAL = "SMTP Gmail Rayuela"
+GEMINI_CREDENTIAL = "Gemini API Key"
+NEXTCLOUD_CREDENTIAL = "Nextcloud WebDAV"
 
 
 class BootstrapError(RuntimeError):
@@ -392,6 +395,8 @@ def apply_node_credentials(
     webhook_credential_id: str,
     mantis_credential_id: str,
     smtp_credential_id: str | None,
+    gemini_credential_id: str | None = None,
+    nextcloud_credential_id: str | None = None,
 ) -> None:
     for node in workflow.get("nodes", []):
         name = node.get("name")
@@ -412,6 +417,18 @@ def apply_node_credentials(
             credentials["smtp"] = {
                 "id": smtp_credential_id,
                 "name": SMTP_CREDENTIAL,
+            }
+        elif name == "Generar Informe":
+            credentials = node.setdefault("credentials", {})
+            credentials["httpHeaderAuth"] = {
+                "id": gemini_credential_id,
+                "name": GEMINI_CREDENTIAL,
+            }
+        elif name == "Guardar Informe":
+            credentials = node.setdefault("credentials", {})
+            credentials["httpBasicAuth"] = {
+                "id": nextcloud_credential_id,
+                "name": NEXTCLOUD_CREDENTIAL,
             }
 
 
@@ -474,6 +491,11 @@ def main() -> int:
         default=str(DEFAULT_ERROR_WORKFLOW),
         help="JSON del workflow de errores",
     )
+    parser.add_argument(
+        "--informe-workflow",
+        default=str(DEFAULT_INFORME_WORKFLOW),
+        help="JSON del workflow Fl.3 (informe ejecutivo con Gemini)",
+    )
     parser.add_argument("--skip-grafana", action="store_true", help="No configurar Grafana")
     parser.add_argument("--skip-smtp", action="store_true", help="No configurar SMTP")
     args = parser.parse_args()
@@ -504,6 +526,9 @@ def main() -> int:
         raise BootstrapError(
             "MANTIS_API_TOKEN tiene un placeholder. Define el token real antes de ejecutar el bootstrap."
         )
+    gemini_api_key = env_value(env, "GEMINI_API_KEY")
+    nextcloud_user = env_value(env, "N8N_NEXTCLOUD_USER", "admin")
+    nextcloud_password = env_value(env, "N8N_NEXTCLOUD_PASSWORD")
 
     project_id = int(env_value(env, "MANTIS_PROJECT_ID", "1") or "1")
     category_id = int(env_value(env, "MANTIS_CATEGORY_ID", "1") or "1")
@@ -559,6 +584,44 @@ def main() -> int:
         {"name": "Authorization", "value": mantis_token},
     )
 
+    gemini_credential_id: str | None = None
+    if gemini_api_key and not is_placeholder(gemini_api_key):
+        gemini_credential_id = n8n.ensure_credential(
+            GEMINI_CREDENTIAL,
+            "httpHeaderAuth",
+            {"name": "x-goog-api-key", "value": gemini_api_key},
+        )
+    else:
+        print(
+            "[warn] GEMINI_API_KEY no definida o tiene placeholder: no se crea la credencial Gemini API Key",
+            file=sys.stderr,
+        )
+        existing_gemini = next(
+            (
+                credential
+                for credential in n8n.list_credentials()
+                if credential.get("name") == GEMINI_CREDENTIAL
+                and credential.get("type") == "httpHeaderAuth"
+            ),
+            None,
+        )
+        if existing_gemini:
+            gemini_credential_id = existing_gemini["id"]
+            print("[info] Gemini: se reutiliza la credencial existente sin modificarla")
+
+    nextcloud_credential_id: str | None = None
+    if nextcloud_password:
+        nextcloud_credential_id = n8n.ensure_credential(
+            NEXTCLOUD_CREDENTIAL,
+            "httpBasicAuth",
+            {"user": nextcloud_user, "password": nextcloud_password},
+        )
+    else:
+        print(
+            "[warn] N8N_NEXTCLOUD_PASSWORD no definida: no se crea la credencial Nextcloud WebDAV",
+            file=sys.stderr,
+        )
+
     smtp_credential_id: str | None = None
     if args.skip_smtp:
         print("[skip] Credencial SMTP (--skip-smtp)", file=sys.stderr)
@@ -599,6 +662,7 @@ def main() -> int:
     main_workflow = read_json(Path(args.main_workflow))
     backup_workflow = read_json(Path(args.backup_workflow))
     error_workflow = read_json(Path(args.error_workflow))
+    informe_workflow = read_json(Path(args.informe_workflow))
 
     apply_node_credentials(
         main_workflow,
@@ -617,6 +681,16 @@ def main() -> int:
     )
     apply_email_config(backup_workflow, from_email, to_email)
 
+    apply_node_credentials(
+        informe_workflow,
+        webhook_credential_id,
+        mantis_credential_id,
+        smtp_credential_id,
+        gemini_credential_id=gemini_credential_id,
+        nextcloud_credential_id=nextcloud_credential_id,
+    )
+    apply_email_config(informe_workflow, from_email, to_email)
+
     error_workflow_id = n8n.ensure_workflow(error_workflow)
     main_workflow_id = n8n.ensure_workflow(
         main_workflow,
@@ -624,6 +698,10 @@ def main() -> int:
     )
     backup_workflow_id = n8n.ensure_workflow(
         backup_workflow,
+        error_workflow_id=error_workflow_id,
+    )
+    informe_workflow_id = n8n.ensure_workflow(
+        informe_workflow,
         error_workflow_id=error_workflow_id,
     )
 
@@ -646,6 +724,7 @@ def main() -> int:
     print("[ok] Bootstrap completado")
     print(f"[info] Workflow Fl.1: {main_workflow_id}")
     print(f"[info] Workflow Fl.2: {backup_workflow_id}")
+    print(f"[info] Workflow Fl.3: {informe_workflow_id}")
     print(f"[info] Workflow errores: {error_workflow_id}")
     print(f"[info] Contact point: {contact_point}")
     print("[info] Probar: Grafana -> Alerting -> Contact points -> n8n -> Test")
