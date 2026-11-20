@@ -86,7 +86,7 @@ def load_env(path: Path) -> dict[str, str]:
     if not path.exists():
         raise BootstrapError(f"No existe el archivo .env: {path}")
     values: dict[str, str] = {}
-    for raw_line in path.read_text().splitlines():
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -137,7 +137,7 @@ def read_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise BootstrapError(f"No existe el archivo: {path}")
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise BootstrapError(f"JSON invalido en {path}: {exc}") from exc
     if not isinstance(data, dict):
