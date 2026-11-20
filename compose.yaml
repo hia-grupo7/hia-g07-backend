@@ -59,6 +59,11 @@ secrets:
   # Alta disponibilidad (CARD-08): usuario de monitoreo creado automaticamente en el primer arranque del cluster.
   monitor_password:
     file: ./secrets/monitor_password
+  # Diagnostico con IA (n8n + Qdrant): clave de Qdrant y token del webhook que recibe las fallas.
+  qdrant_api_key:
+    file: ./secrets/qdrant_api_key
+  diagnostico_webhook_token:
+    file: ./secrets/diagnostico_webhook_token
 
 volumes:
   # El volumen "rayuela_postgres_data" del PostgreSQL de un solo nodo ya no se usa (queda en Docker sin tocar,
@@ -73,6 +78,8 @@ volumes:
     name: rayuela_etcd2_data
   etcd3_data:
     name: rayuela_etcd3_data
+  qdrant_data:
+    name: rayuela_qdrant_data
   pgadmin_data:
     name: rayuela_pgadmin_data
   prometheus_data:
@@ -89,6 +96,38 @@ volumes:
     name: rayuela_backups_data
 
 services:
+
+  # ---------------------------------------------------------------------------
+  # BASE VECTORIAL — Qdrant (diagnostico con IA)
+  # Guarda el manual operativo (docs/manual-operativo) como vectores para que el agente de n8n lo consulte (RAG).
+  # Es un dato derivado: si se pierde, se reconstruye ejecutando el flujo "IA-01 Carga del manual en Qdrant".
+  # No se publica al equipo; exige una clave de API (secreto qdrant_api_key) que se pasa con un envoltorio de
+  # arranque, igual que PgBouncer, para que no aparezca en "docker inspect".
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    container_name: rayuela-qdrant
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    entrypoint:
+      - /bin/sh
+      - -c
+      - export QDRANT__SERVICE__API_KEY="$$(cat /run/secrets/qdrant_api_key)" && exec ./entrypoint.sh
+    volumes:
+      - qdrant_data:/qdrant/storage
+    secrets:
+      - qdrant_api_key
+    networks:
+      - rayuela-network
+    expose:
+      - "6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   # ===========================================================================
   # CAPA DE DATOS
@@ -756,6 +795,8 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - backups_data:/backups:ro
+      # Manual operativo para el asistente de diagnostico con IA: el flujo "IA-01" lo lee y lo carga en Qdrant.
+      - ./docs/manual-operativo:/manual:ro
     ports:
       - "127.0.0.1:${N8N_PORT:-5678}:5678"
     networks:

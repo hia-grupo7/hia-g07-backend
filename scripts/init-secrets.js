@@ -105,6 +105,9 @@ const SECRETOS = [
   { nombre: 'honeypot_webhook_token', vars: ['HONEYPOT_WEBHOOK_TOKEN'], tipo: 'infra', anterior: '', largo: 48 },
   // Alta disponibilidad (CARD-08): usuario de monitoreo de los exportadores; se genera al azar, no tiene valor anterior.
   { nombre: 'monitor_password', vars: ['MONITOR_PASSWORD'], tipo: 'infra', anterior: '', largo: 24 },
+  // Diagnostico con IA (n8n + Qdrant): clave de Qdrant y token del webhook; se generan al azar.
+  { nombre: 'qdrant_api_key', vars: ['QDRANT_API_KEY'], tipo: 'infra', anterior: '', largo: 48 },
+  { nombre: 'diagnostico_webhook_token', vars: ['DIAGNOSTICO_WEBHOOK_TOKEN'], tipo: 'infra', anterior: '', largo: 48 },
   { nombre: 'mantis_db_password', vars: ['MANTIS_DB_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, mantis: true },
   { nombre: 'mantis_db_root_password', vars: ['MANTIS_DB_ROOT_PASSWORD'], tipo: 'infra', anterior: '', largo: 32, mantis: true },
   { nombre: 'mantis_crypto_salt', vars: ['MANTIS_CRYPTO_SALT'], tipo: 'infra', anterior: '', largo: 64, mantis: true },
