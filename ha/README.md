@@ -90,6 +90,50 @@ recibir un error. Los pedidos nuevos esperan y se completan.
 Cambio ordenado de líder (mantenimiento, ~3 s, sin pérdida):
 `docker exec rayuela-patroni1 patronictl switchover rayuela-cluster --leader patroni1 --candidate patroni2 --scheduled now --force`
 
+## Retención de WAL y apagado de los nodos
+
+Con la base cargada (millones de filas) el nodo caído **no podía volver**: tras un `docker stop` del líder, el otro nodo
+pasaba a líder y el que volvía se quedaba en `starting` con el error
+`requested WAL segment ... has already been removed`. Para reincorporarse, un ex líder necesita el WAL desde su último
+checkpoint (`pg_rewind`), y con una carga grande ese checkpoint dura minutos y queda unos 200 MB atrás. El nodo que ahora es
+líder solo conservaba 128 MB (valor por defecto) y ya había reciclado el resto. Con bases chicas esa brecha nunca se supera,
+por eso no se notaba. La única salida era reconstruir el nodo (`patronictl reinit`).
+
+Se corrigió con dos ajustes:
+
+| Ajuste | Dónde | Efecto |
+|---|---|---|
+| `wal_keep_size = 2GB` | Configuración dinámica de Patroni (etcd). Para clústers nuevos, en `ha/patroni-entrypoint.sh` | El nodo que es líder guarda hasta 2 GB de WAL para el que está caído |
+| `stop_grace_period: 60s` | `compose.yaml`, en `patroni1` y `patroni2` | Docker da 60 s (no los 10 s por defecto) para que Postgres termine el checkpoint de apagado; con 10 s lo mataba a medio apagar |
+
+**El valor en `ha/patroni-entrypoint.sh` solo se aplica al crear el clúster** (volumen nuevo). En un clúster que ya
+existe se cambia así (no hace falta reiniciar) y se comprueba:
+
+```bash
+docker exec rayuela-patroni1 patronictl edit-config rayuela-cluster -s postgresql.parameters.wal_keep_size=2GB --force
+docker exec rayuela-patroni1 psql -U postgres -At -c "SHOW wal_keep_size;"      # 2GB
+```
+
+El WAL conservado ocupa disco en el nodo líder (hasta 2 GB por encima del tamaño normal).
+
+Prueba repetida con el ajuste, con la carga reciente que antes lo rompía (tabla temporal de 8 millones de filas más un
+`UPDATE`, unos 3 GB de WAL, y `docker stop` del líder inmediatamente después):
+
+| Medida | Resultado |
+|---|---|
+| `docker stop` del líder | 19 s, apagado ordenado (código 143) |
+| Nuevo líder | 20 s después de iniciar el `stop` |
+| Filas en el nuevo líder | 8.000.000 de 8.000.000 (0 perdidas) |
+| Nodo caído al volver | `streaming` a los 9 s de arrancar y réplica sincrónica en unos 30 s, sin el error de WAL |
+
+También se comprobó con una escritura mientras un nodo estaba caído: la fila agregada en el líder apareció en el nodo
+cuando volvió.
+
+Si aun así un nodo queda en `starting` y el log de Postgres repite `has already been removed`, se reconstruye desde el líder:
+por ejemplo, si el atascado es `patroni1` y el líder es `patroni2`:
+`docker exec rayuela-patroni2 patronictl reinit rayuela-cluster patroni1 --force`. Se ejecuta desde el nodo que está
+corriendo bien y borra solo la copia del nodo atascado.
+
 ## Volver atrás (al PostgreSQL de un solo nodo)
 
 El volumen del diseño anterior (`rayuela_postgres_data`) no se borra. Para volver hay que usar la versión anterior del

@@ -19,12 +19,21 @@ export ALLOW_NOSSL=true
 # Configuracion dinamica inicial del cluster (se guarda en etcd la primera vez):
 #  - modo sincronico NO estricto: una escritura se confirma cuando la replica la tiene (RPO cero);
 #    si cae la replica, el servicio sigue en modo asincronico en vez de bloquear las escrituras.
+#  - wal_keep_size: WAL que el nodo conserva para las replicas. Con el valor por defecto (128 MB), si un nodo cae y
+#    el otro pasa a lider, el nodo caido no encuentra el WAL que necesita para volver (pg_rewind) y se queda en
+#    "starting" hasta que se lo reconstruye con "patronictl reinit". Con bases grandes (checkpoints largos) pasa
+#    seguro; 2GB deja margen amplio. Ver ha/README.md ("Retencion de WAL").
 #  - post_init: crea el usuario de monitoreo ademas de los usuarios propios de Spilo.
+# Importante: esta seccion solo se aplica al CREAR el cluster (volumen nuevo). En un cluster que ya existe hay que
+# cambiarlo con: patronictl edit-config -s postgresql.parameters.wal_keep_size=2GB --force
 export SPILO_CONFIGURATION="
 bootstrap:
   post_init: bash /hook/patroni-post-init.sh zalandos
   dcs:
     synchronous_mode: true
+    postgresql:
+      parameters:
+        wal_keep_size: 2GB
 "
 
 exec /bin/sh /launch.sh init

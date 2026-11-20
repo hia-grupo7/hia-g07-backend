@@ -205,6 +205,9 @@ services:
     container_name: rayuela-patroni1
     hostname: patroni1
     restart: unless-stopped
+    # Con bases grandes el checkpoint de apagado tarda mas de los 10 s que Docker da por defecto: sin esto lo mata
+    # (SIGKILL) a medio apagar y el nodo, al volver, necesita pg_rewind y WAL que el otro nodo ya pudo borrar.
+    stop_grace_period: 60s
     shm_size: 256mb
     entrypoint: ["/bin/sh", "/hook/patroni-entrypoint.sh"]
     environment:
@@ -241,6 +244,7 @@ services:
     container_name: rayuela-patroni2
     hostname: patroni2
     restart: unless-stopped
+    stop_grace_period: 60s
     shm_size: 256mb
     entrypoint: ["/bin/sh", "/hook/patroni-entrypoint.sh"]
     environment:
