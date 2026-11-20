@@ -156,6 +156,7 @@ node scripts/init-secrets.js     # el mismo comando en Windows, Linux y macOS (r
 | `jwt_secret` | backend (firma de tokens) |
 | `pgadmin_password`, `grafana_admin_password` | pgAdmin, Grafana |
 | `mantis_db_password`, `mantis_db_root_password`, `mantis_crypto_salt` | MantisBT y su base MariaDB |
+| `nc_db_password`, `nc_admin_password` | Nextcloud y su base Postgres (`nextcloud/compose.nextcloud.yaml`, puerto local 8082) |
 | `gemini_api_key`, `mercadopago_access_token`, `email_pass` | backend (claves de terceros) |
 | `honeypot_webhook_token` | backend y n8n (token del webhook del honeypot; no entra en la rotación automática) |
 

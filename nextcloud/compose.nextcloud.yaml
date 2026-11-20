@@ -6,8 +6,8 @@ services:
     container_name: nextcloud-db
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${NC_DB_NAME}
-      POSTGRES_USER: ${NC_DB_USER}
+      POSTGRES_DB: ${NC_DB_NAME:-nextcloud}
+      POSTGRES_USER: ${NC_DB_USER:-nextcloud_user}
       POSTGRES_PASSWORD_FILE: /run/secrets/nc_db_password
     secrets:
       - nc_db_password
@@ -16,7 +16,7 @@ services:
     networks:
       - nextcloud-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${NC_DB_USER} -d ${NC_DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${NC_DB_USER:-nextcloud_user} -d ${NC_DB_NAME:-nextcloud}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -31,13 +31,13 @@ services:
       nextcloud-db:
         condition: service_healthy
     ports:
-      - "127.0.0.1:8081:80"
+      - "127.0.0.1:${NC_PORT:-8082}:80"
     environment:
       POSTGRES_HOST: nextcloud-db
-      POSTGRES_DB: ${NC_DB_NAME}
-      POSTGRES_USER: ${NC_DB_USER}
+      POSTGRES_DB: ${NC_DB_NAME:-nextcloud}
+      POSTGRES_USER: ${NC_DB_USER:-nextcloud_user}
       POSTGRES_PASSWORD_FILE: /run/secrets/nc_db_password
-      NEXTCLOUD_ADMIN_USER: ${NC_ADMIN_USER}
+      NEXTCLOUD_ADMIN_USER: ${NC_ADMIN_USER:-admin}
       NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/nc_admin_password
       NEXTCLOUD_TRUSTED_DOMAINS: localhost nextcloud
     secrets:
@@ -73,6 +73,6 @@ networks:
 
 secrets:
   nc_db_password:
-    file: ../secrets/nc_db_password.txt
+    file: ../secrets/nc_db_password
   nc_admin_password:
-    file: ../secrets/nc_admin_password.txt
+    file: ../secrets/nc_admin_password
