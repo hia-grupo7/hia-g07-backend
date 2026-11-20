@@ -64,7 +64,7 @@ flowchart LR
 Consulta de los accesos al honeypot:
 
 ```bash
-docker exec rayuela-db-primary sh -c 'PGPASSWORD=$(cat /run/secrets/db_password) psql -h 127.0.0.1 -U postgres -d postgres -c "select id, fecha, detalle from auditorias where accion = '"'"'HONEYPOT'"'"' order by id desc limit 20"'
+docker exec rayuela-patroni1 sh -c 'PGPASSWORD=$(cat /run/secrets/db_password) psql -h 127.0.0.1 -U postgres -d rayuela -c "select id, fecha, detalle from auditorias where accion = '"'"'HONEYPOT'"'"' order by id desc limit 20"'
 ```
 
 ## 6. Guías por escenario

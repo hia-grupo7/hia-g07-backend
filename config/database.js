@@ -28,11 +28,29 @@ const sequelize = new Sequelize(dbName, dbUser, dbPass, {
       }
     ]
   },
+  // Alta disponibilidad (CARD-08): durante un failover de Patroni (~30 s) no hay lider al que escribir y HAProxy cierra
+  // las conexiones. En vez de devolver un error al usuario, los pedidos reintentan con espera creciente
+  // (1 s, 1,5 s, 2,2 s... ~49 s en total, menos que el tiempo maximo de espera de nginx).
+  retry: {
+    max: 8,
+    backoffBase: 1000,
+    backoffExponent: 1.5,
+    match: [
+      /ConnectionError/, /ConnectionRefused/, /ConnectionTimedOut/, /ConnectionAcquireTimeout/,
+      /ETIMEDOUT/, /ECONNRESET/, /ECONNREFUSED/, /EHOSTUNREACH/, /ENOTFOUND/,
+      /Connection terminated/, /terminating connection/, /read-only transaction/
+    ]
+  },
+  dialectOptions: {
+    keepAlive: true,                   // detecta conexiones muertas tras la caida de un nodo
+    connectionTimeoutMillis: 5000      // no esperar indefinidamente a un nodo caido
+  },
   pool: {
     max: 20,       // Límite de conexiones para no saturar PostgreSQL (Connection Pooling)
     min: 0,
-    acquire: 30000,
-    idle: 10000
+    acquire: 45000, // espera maxima por una conexion libre (cubre la ventana de un failover)
+    idle: 10000,
+    evict: 5000     // descarta conexiones inactivas para no reutilizar las del lider caido
   }
 });
 
