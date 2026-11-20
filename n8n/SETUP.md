@@ -16,7 +16,7 @@ Este módulo contiene los flujos de automatización de n8n para el proyecto **Ra
 | `00-error-handler.json` | N8N-00 Registro de Errores | Error interno | Workflow de error global que loguea fallos de cualquier otro workflow |
 | `01-alertas-infraestructura-mantisbt.json` | N8N-01 Fl.1 — Alertas de Infraestructura | Webhook (POST desde Grafana) | Recibe alertas de Grafana, crea ticket en MantisBT y notifica por email |
 | `02-verificacion-backups.json` | N8N-01 Fl.2 — Verificación de Backups | Schedule (04:00 AM diario) | Verifica integridad del backup más reciente de PostgreSQL y notifica por email si falla |
-| `03-informe-ejecutivo-gemini.json` | N8N-02 Fl.3 — Informe Ejecutivo Asistido por IA (Gemini 2.5 Flash) | Schedule (lunes 09:00) | Genera informe ejecutivo semanal con métricas del backend + análisis Gemini → guarda en Nextcloud (`/Informes_Ejecutivos`) y notifica por email |
+| `03-informe-ejecutivo-gemini.json` | N8N-02 Fl.3 — Informe Ejecutivo Asistido por IA (Gemini 3.8 Flash) | Schedule (lunes 09:00) | Genera informe ejecutivo semanal con métricas del backend + análisis Gemini → guarda en Nextcloud (`/Informes_Ejecutivos`) y notifica por email |
 
 ---
 
@@ -27,6 +27,8 @@ Este módulo contiene los flujos de automatización de n8n para el proyecto **Ra
 - Variables de entorno correctamente configuradas en `.env`
 - Cuenta de Gmail con **contraseña de aplicación** habilitada (para SMTP)
 - MantisBT corriendo con un **token API** generado
+- **Nextcloud** corriendo (`nextcloud/compose.nextcloud.yaml`) con la carpeta `Informes_Ejecutivos` creada (Fl.3)
+- **API key de Gemini** válida (Fl.3)
 
 ---
 
@@ -75,6 +77,14 @@ N8N_ALERT_EMAIL_TO=destinatario@gmail.com
 MANTIS_API_TOKEN=tu_token_api_mantis
 MANTIS_PROJECT_ID=1
 MANTIS_CATEGORY_ID=1
+
+# Fl.3 — Informe ejecutivo (Gemini + Nextcloud)
+GEMINI_API_KEY=tu_api_key_de_gemini
+N8N_NEXTCLOUD_USER=admin
+N8N_NEXTCLOUD_PASSWORD=tu_password_de_aplicacion_nextcloud
+# Solo documentales: la URL y la carpeta están fijas en el workflow
+N8N_NEXTCLOUD_URL=http://nextcloud:80
+N8N_NEXTCLOUD_FOLDER=Informes_Ejecutivos
 ```
 
 > **Cómo generar la `N8N_ENCRYPTION_KEY`:**
@@ -84,6 +94,9 @@ MANTIS_CATEGORY_ID=1
 
 > **Cómo generar una contraseña de aplicación de Gmail:**  
 > Google Account → Seguridad → Verificación en 2 pasos → Contraseñas de aplicaciones
+
+> **Contraseña de aplicación de Nextcloud (Fl.3):**  
+> Nextcloud → Configuración personal → Seguridad → Contraseñas de aplicación. Usala en `N8N_NEXTCLOUD_PASSWORD`.
 
 ---
 
@@ -110,6 +123,18 @@ docker compose ps n8n
 # También podés ver los logs en tiempo real:
 docker compose logs -f n8n
 ```
+
+### Stack de Nextcloud (necesario para Fl.3)
+
+El Fl.3 guarda el informe por WebDAV en el contenedor `nextcloud`, por lo que el stack de Nextcloud debe estar corriendo y compartir la red `integracion-net` con n8n:
+
+```bash
+# OJO: --env-file debe ir ANTES de -f para que se resuelvan NC_DB_NAME / NC_DB_USER / NC_ADMIN_USER
+docker compose --env-file .env -f nextcloud/compose.nextcloud.yaml up -d
+docker compose --env-file .env -f nextcloud/compose.nextcloud.yaml ps
+```
+
+> La red `integracion-net` la crea el stack de Nextcloud; el `compose.yaml` principal la declara `external: true` y n8n se une a ella. Levantá Nextcloud **antes** que el stack principal, o creala a mano con `docker network create integracion-net`.
 
 ---
 
@@ -138,15 +163,43 @@ python3 n8n/scripts/bootstrap_fl1.py --env-file /ruta/a/tu/.env
 
 ### Qué hace el bootstrap
 
-1. **Importa los 3 workflows** (00, 01, 02) a n8n
+1. **Importa los 4 workflows** (00, 01, 02, 03) a n8n
 2. **Crea/actualiza credenciales** en n8n:
    - `Grafana Webhook Basic Auth` — Basic Auth del webhook del Fl.1
    - `MantisBT API Token` — Header Auth para crear tickets
-   - `SMTP Gmail Rayuela` — Credencial SMTP para emails del Fl.2
+   - `SMTP Gmail Rayuela` — Credencial SMTP para emails (Fl.1, Fl.2 y Fl.3)
+   - `Gemini API Key` — Header Auth (`x-goog-api-key`) para el Fl.3
+   - `Nextcloud WebDAV` — Basic Auth para guardar el informe del Fl.3
 3. **Configura Grafana** (contact point n8n + política de alertas)
-4. Es **idempotente**: podés ejecutarlo varias veces sin problema
+4. Es **idempotente**: podés ejecutarlo varias veces sin problema (los workflows se actualizan **por nombre**)
 
 > **Prerequisito del bootstrap:** n8n debe tener el usuario owner ya creado. Si es la primera vez que levantás n8n, entrá a `http://127.0.0.1:5678`, completá el wizard de bienvenida y luego ejecutá el bootstrap.
+
+### Reproducción de Fl.3 (Nextcloud + Gemini)
+
+El bootstrap crea/actualiza el Fl.3 igual que Fl.1 y Fl.2, pero **no** prepara Nextcloud. Pasos completos desde cero:
+
+1. **Completar `.env`**: `GEMINI_API_KEY`, `N8N_NEXTCLOUD_USER`/`N8N_NEXTCLOUD_PASSWORD` y SMTP (`N8N_SMTP_*` o `EMAIL_*`). Si falta la API key o la password de Nextcloud, el bootstrap solo avisa y **no** crea esas credenciales (reusa la existente por nombre, si existe).
+2. **Levantar Nextcloud** (ver sección 2) y verificar que comparta `integracion-net` con n8n:
+   ```bash
+   docker network inspect integracion-net --format '{{range .Containers}}{{.Name}} {{end}}'
+   # Deben aparecer nextcloud y rayuela-n8n
+   ```
+3. **Confiar en el host `nextcloud`**:
+   - Instalación nueva: ya viene en `nextcloud/compose.nextcloud.yaml` (`NEXTCLOUD_TRUSTED_DOMAINS: localhost nextcloud`).
+   - Instalación existente (ese env var solo aplica en la instalación inicial):
+     ```bash
+     docker compose --env-file .env -f nextcloud/compose.nextcloud.yaml \
+       exec -u www-data nextcloud php occ config:system:set trusted_domains 1 --value=nextcloud
+     ```
+4. **Crear la carpeta** `Informes_Ejecutivos` en Nextcloud (UI o WebDAV `MKCOL`). Un PUT a una carpeta inexistente devuelve `409 Conflict`.
+5. **Ejecutar el bootstrap** (lee el `.env` de la raíz del repo):
+   ```bash
+   python3 n8n/scripts/bootstrap_fl1.py
+   ```
+6. **Probar**: ejecutar el workflow desde la UI y verificar que aparezca `informe-YYYY-MM-DD.md` en `/Informes_Ejecutivos`.
+
+> **Modelo Gemini:** el workflow usa `gemini-3.8-flash` (fijado en el JSON). `gemini-2.5-flash` ya no está disponible para cuentas nuevas y la API responde `404`.
 
 ---
 
@@ -154,10 +207,11 @@ python3 n8n/scripts/bootstrap_fl1.py --env-file /ruta/a/tu/.env
 
 1. Abrí `http://127.0.0.1:5678` en el navegador
 2. Iniciá sesión con `N8N_BASIC_AUTH_USER` / `N8N_BASIC_AUTH_PASSWORD`
-3. En la lista de workflows verificá que los 3 tengan el toggle en **verde (activo)**:
+3. En la lista de workflows verificá que los 4 tengan el toggle en **verde (activo)**:
    - `N8N-00 - Registro de Errores`
    - `N8N-01 Fl.1 - Alertas de Infraestructura (Grafana → MantisBT → Notificacion)`
    - `N8N-01 Fl.2 - Verificacion de Backups (Schedule → Check → Notificar)`
+   - `N8N-02 Fl.3 - Informe Ejecutivo Asistido por IA (Gemini ...)`
 
 Si alguno no está activo, hacé click en el toggle para activarlo.
 
@@ -243,7 +297,9 @@ Schedule (Lun 09:00)  →  Obtener Metricas (backend /api/dashboard + /api/metri
 4. n8n guarda el informe en Nextcloud (`/remote.php/dav/files/<user>/Informes_Ejecutivos/informe-YYYY-MM-DD.md`).
 5. Envía el informe por email (SMTP Gmail Rayuela).
 
-**Gestion de errores:** ramas de error hacia el workflow `N8N-00 - Registro de Errores` (`ncCuil3GfmQzaetM).
+**Gestión de errores:** ramas de error hacia el workflow `N8N-00 - Registro de Errores` (`ncCuil3GfmQzaetM`).
+
+> Los nodos usan salida de error (`onError: continueErrorOutput`): una falla se enruta a `Registrar Error` y la ejecución puede quedar en `success`. Ver troubleshooting.
 
 ---
 
@@ -291,6 +347,27 @@ n8n requiere completar el wizard inicial antes de aceptar llamadas a la API. Acc
 - Verificá que `N8N_SMTP_PASSWORD` sea una **contraseña de aplicación** de Google, no tu contraseña normal
 - Verificá en la UI de n8n que la credencial `SMTP Gmail Rayuela` esté guardada correctamente
 - Revisá los logs: `docker compose logs n8n | grep -i smtp`
+
+### n8n no resuelve el host `nextcloud` (`getaddrinfo ENOTFOUND`)
+
+- n8n debe estar en `integracion-net`. Levantá Nextcloud primero y luego recreá n8n:
+  `docker compose up -d n8n`
+- Verificá: `docker network inspect integracion-net --format '{{range .Containers}}{{.Name}} {{end}}'`
+
+### El Fl.3 termina "success" pero no guarda el informe en Nextcloud
+
+- Verificá que `trusted_domains` incluya `nextcloud` (sección 3, paso 3). Sin eso Nextcloud responde `400`.
+- Verificá que exista la carpeta `Informes_Ejecutivos` (PUT a carpeta inexistente = `409`).
+- Como los nodos usan `onError: continueErrorOutput`, el fallo puede quedar oculto: revisá el nodo `Registrar Error` en la ejecución y en `docker compose logs n8n`.
+
+### Gemini responde 404 / 400 en el Fl.3
+
+- `404 ... model ... no longer available` → el modelo cambió; usá `gemini-3.8-flash` (ya configurado en el JSON).
+- `400/403` → `GEMINI_API_KEY` inválida o sin permisos; regenerala y volvé a correr el bootstrap.
+
+### El email del Fl.3 llega sin el informe
+
+El nodo `Guardar Informe` (PUT WebDAV) devuelve body vacío, por eso el email debe leer el informe desde `Parsear Informe` con `{{ $('Parsear Informe').first().json.informe }}` y no desde `$json`.
 
 ### El Fl.1 no recibe alertas de Grafana
 

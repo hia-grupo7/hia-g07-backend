@@ -224,7 +224,7 @@
         "toEmail": "nachotty2@gmail.com",
         "subject": "=\"Informe ejecutivo semanal Rayuela\"",
         "emailFormat": "html",
-        "html": "=<div style=\"font-family: Arial, sans-serif; color: #333; max-width: 640px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;\">\n  <h2 style=\"color: #2c6fbb; margin-top: 0;\">Informe ejecutivo semanal - Rayuela</h2>\n  <p>El informe ejecutivo semanal fue generado por la IA (Gemini 3.8 Flash) a partir de las metricas del sistema.</p>\n  <pre style=\"background-color: #f9f9f9; padding: 12px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px;\">{{ $json.informe }}</pre>\n</div>",
+        "html": "=<div style=\"font-family: Arial, sans-serif; color: #333; max-width: 640px; margin: 0 auto; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px;\">\n  <h2 style=\"color: #2c6fbb; margin-top: 0;\">Informe ejecutivo semanal - Rayuela</h2>\n  <p>El informe ejecutivo semanal fue generado por la IA (Gemini 3.8 Flash) a partir de las metricas del sistema.</p>\n  <pre style=\"background-color: #f9f9f9; padding: 12px; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 13px;\">{{ $('Parsear Informe').first().json.informe }}</pre>\n</div>",
         "options": {}
       },
       "credentials": {
